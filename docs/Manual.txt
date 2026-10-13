@@ -7,7 +7,7 @@ Requires 64-bit Windows 10/11 and a graphics driver supporting OpenGL 2.1
 with framebuffer objects. Only Windows system DLLs are imported.
 
 THE CHALLENGE
-The complete playable executable is 92,672 bytes, below both a strict
+The complete playable executable is 95,232 bytes, below both a strict
 96,000-byte limit and a 96 KiB limit. It is not an HTML wrapper, launcher,
 compressed self-extractor, or downloader. No external game assets are needed.
 Source, documentation and preview images are separate optional materials.
@@ -46,27 +46,31 @@ Three weapons, three ordinary enemy classes, a six-legged boss, 25 enemies
 including relay reinforcements, three relays, pickups, armor, map, jumping,
 crouching, sprinting, death/restart and extraction states. Procedural metal
 materials, architecture, machinery, animated robots, headlamp shadows,
-screen-space occlusion, glow, fog, particles and weapon recoil. Music and
+surface relief, brushed metal, worn paint, damp floors, HDR lighting, soft
+bloom, fog, sparks and projectile light. Fans and reactor machinery rotate;
+robots have movement-driven strides and death animations, and the Warden
+has articulated legs and pistons. Weapons have detailed parts and recoil. Music and
 sound effects are synthesized at runtime. Text uses installed Windows fonts.
 
 VERIFICATION
 The corrected executable passed 17 gameplay checks, 16 camera-relative WASD
 checks (four directions at four headings), four rendered mouse-direction
-checks, and the OpenGL error check. A deterministic Recruit playthrough
+checks, the OpenGL error check, and animated-combat rendering. A deterministic Recruit playthrough
 completed all three relays, defeated all 25 hostiles and extracted through
 ordinary movement, firing, damage, pickup and interaction code, without
 teleporting or invulnerability. Its perfect aim is not human difficulty QA.
 
 Native 1280x720 render captures were inspected. On the local GTX 1060 6GB,
-the final 90-frame rendering sample averaged 6.09 ms/frame. This short
-sample is not a guarantee of sustained frame rate on other computers.
+three 90-frame rendering samples had a median of 3.35 ms/frame, compared
+with 4.10 ms/frame for the previous build. These short samples do not
+guarantee sustained frame rate on this or other computers.
 
 REPRODUCE CHECKS
 From a writable folder, run these optional executable arguments and wait
 for the process to exit:
   NULLPOINT.exe --selftest  -> selftest.txt
   NULLPOINT.exe --playtest  -> campaign.txt
-  NULLPOINT.exe --verify    -> graphics.txt and five native BMP captures
+  NULLPOINT.exe --verify    -> graphics.txt and six native BMP captures
 Exit code zero means the selected check passed. The graphics check requires
 a working OpenGL driver. These files are generated only in diagnostic modes.
 
@@ -75,6 +79,8 @@ The optional source archive contains nullpoint.c and build.ps1.
 With an x86_64 MinGW-w64 GCC on PATH, run build.ps1 in PowerShell. It builds
 NULLPOINT.exe beside the source and rejects binaries of 96,000 bytes or more.
 An optional -OutputPath argument chooses another output path.
+The optimized build uses single-precision geometry, packed model parts,
+reused procedural meshes, simpler shader noise and view-based culling.
 The verified build used GCC 13.2.0. Other compiler versions may change size.
 Do not add -fdata-sections: this linker can put zero-initialized game buffers
 in the on-disk data section instead of BSS, unnecessarily increasing size.
@@ -85,7 +91,7 @@ right/left basis. Both mouse axes and all WASD directions have explicit
 rendered-view regression checks.
 
 SHA256 (NULLPOINT.exe)
-4e7e759f97de22491fa14bbd1342f6abab2d9af84f6124e2e0c99e5829925f32
+59d7ab303f75a125744a8029134b4bfd7bd30692bd3da350c9ed8ca7aaa29f85
 
 Inspired by the procedural size-coding challenge of .kkrieger; no game code
 or art from .kkrieger is included. This build has not been submitted to a

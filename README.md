@@ -1,6 +1,6 @@
 # NULLPOINT
 
-A native Windows single-player FPS in **92,672 bytes**. Inspired by the procedural size challenge of [.kkrieger](https://simple.wikipedia.org/wiki/.kkrieger).
+A native Windows single-player FPS in **95,232 bytes**. Inspired by the procedural size challenge of [.kkrieger](https://simple.wikipedia.org/wiki/.kkrieger).
 
 **[Download NULLPOINT.exe](https://github.com/n30nex/NULLPOINT/raw/refs/heads/main/bin/NULLPOINT.exe)** · [Full manual](docs/Manual.txt)
 
@@ -33,10 +33,11 @@ Choose Recruit, Operative, or Veteran using the title screen's left/right arrows
 - Three weapons: pulse carbine, breach shotgun, and ion lance.
 - Three ordinary enemy classes, relay reinforcements, and a six-legged boss: 25 enemies in total.
 - A reactor complex with procedural architecture, metal panels, pipework, gantries, machinery, and signs.
-- Headlamp shadows, screen-space occlusion, glow, fog, particles, animated robots, and weapon recoil.
+- HDR lighting with soft, two-pass bloom, headlamp shadows, surface relief, brushed metal, worn paint, damp floors, fog, and sparks.
+- Rotating fans, reactor machinery, articulated Warden legs, movement-driven robot strides, drone rotors, death animations, and mechanical weapon recoil/reloads.
 - Synthesized music and sound effects, armor, pickups, a map, and complete loss/restart/extraction states.
 
-The limit applies to the **uncompressed executable**: 92,672 bytes, leaving 3,328 bytes below the strict 96,000-byte ceiling. The screenshot, documentation, and source are optional and are not loaded by the game. Fonts and DLLs come from Windows. No executable packer or downloader is used.
+The limit applies to the **uncompressed executable**: 95,232 bytes, leaving 768 bytes below the strict 96,000-byte ceiling. The screenshot, documentation, and source are optional and are not loaded by the game. Fonts and DLLs come from Windows. No executable packer or downloader is used.
 
 ## Build
 
@@ -68,16 +69,34 @@ foreach ($check in '--selftest', '--playtest', '--verify') {
 
 - `--selftest`: 17 gameplay checks covering collision, ammunition, damage, objectives, extraction, death, and restart.
 - `--playtest`: a deterministic Recruit campaign using ordinary movement, combat, pickups, damage, and relay interactions. Completes all three relays, defeats all 25 enemies, and extracts without teleportation or invulnerability. Its perfect aim is not a substitute for human difficulty testing.
-- `--verify`: 16 movement checks against the actual rendered camera basis, four mouse-direction checks, OpenGL error checks, five native render captures, and a short rendering benchmark. Requires a working graphics driver.
+- `--verify`: 16 movement checks against the actual rendered camera basis, four mouse-direction checks, OpenGL error checks, six native render captures including animated combat, and a short rendering benchmark. Requires a working graphics driver.
 
 All checks passed on the committed executable. The corrected controls include standard horizontal mouse look, camera-relative strafing, and matching arrow-key yaw.
+
+## Graphics update and compactness
+
+The richer build uses only **2,560 additional bytes** compared with the first release. Model parts are stored as compact signed-byte tables, cube geometry uses indexed corners, and smooth sphere geometry is generated once and reused. Geometry calculations use single precision while the audio synthesizer retains its double-precision time/oscillator path. Enemies outside a conservative view boundary are skipped in both render passes; steep camera angles and wide windows retain a wider boundary.
+
+The shader now computes material coordinates in the vertex stage and uses compact 2D noise instead of repeated 3D noise and per-fragment inverse-matrix work. Bloom is blurred in two passes at one-quarter width and height. Floating-point render targets preserve bright lighting before tone mapping; an 8-bit fallback is provided for drivers that cannot render to the floating-point format.
+
+| Native 1280x720 render benchmark | Previous build | Graphics update |
+| --- | ---: | ---: |
+| Trial 1, ms/frame | 3.40 | 3.19 |
+| Trial 2, ms/frame | 24.30 | 3.35 |
+| Trial 3, ms/frame | 4.10 | 3.37 |
+| Median, ms/frame | **4.10** | **3.35** |
+| Uncompressed executable | 92,672 bytes | 95,232 bytes |
+
+Measured on a GTX 1060 6GB with driver 576.52, using the same 90-frame Warden-arena renderer benchmark after native capture checks. The previous build had one timing outlier; the comparison uses medians. These are short rendering samples, not sustained gameplay or display-refresh guarantees. The final candidate also passed the 17 gameplay checks, 20 movement/mouse checks, OpenGL and animated-combat rendering checks, and a complete Recruit campaign.
+
+![Animated combat capture](docs/combat.png)
 
 ## Executable integrity
 
 SHA-256 of `bin/NULLPOINT.exe`:
 
 ```text
-4e7e759f97de22491fa14bbd1342f6abab2d9af84f6124e2e0c99e5829925f32
+59d7ab303f75a125744a8029134b4bfd7bd30692bd3da350c9ed8ca7aaa29f85
 ```
 
 This is an original game; no .kkrieger code or artwork is included. It has not been submitted to a contest or checked against any additional event rules.

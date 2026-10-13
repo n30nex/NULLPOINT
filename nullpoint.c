@@ -20,7 +20,7 @@
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define CLAMP(a,b,c) (MIN(MAX(a,b),c))
 typedef struct {float x,y,z;} V3;
-typedef struct {V3 p; float yaw,hp,cd,phase,hit; int type,active;} Enemy;
+typedef struct {V3 p; float yaw,hp,cd,phase,hit,gait,speed,fire,dead; int type,active;} Enemy;
 typedef struct {V3 p,v; float life,maxlife,size; int type;} Particle;
 typedef struct {V3 p,v; float life; int owner;} Bolt;
 typedef struct {V3 p; float sx,sy,sz; int kind,active;} Prop;
@@ -38,14 +38,14 @@ static Bolt bolts[96]; static int boltIndex;
 static Prop props[256]; static int propCount;
 static Pickup pickups[128]; static int pickupCount;
 static Relay relays[3];
-static V3 player; static float yaw,pitch,vy,health,armor,gameTime,totalTime,damageFlash,hitFlash,gunKick,shootCD,reloadTime,stepPhase,shake,toastTime,extraction;
+static V3 player; static float yaw,pitch,vy,health,armor,gameTime,totalTime,damageFlash,hitFlash,gunKick,shootCD,reloadTime,stepPhase,shake,toastTime,extraction,gateLift;
 static int weapon,ammo[3],reserve[3],kills,relayCount,bossAwake,bossDead,grounded,shotsFired,hitsMade,deaths,menuIndex=0,difficulty=1;
 static const int magazine[3]={30,8,6};
 static const char *weaponName[3]={"VX-30 / PULSE CARBINE","BR-8 / BREACH SHOTGUN","ARC-6 / ION LANCE"};
 static char toast[128],lastError[4096];
 static float mouseSensitivity=.0021f;
 static unsigned rng=0x496f6e;
-static GLuint worldList,worldProgram,postProgram,depthProgram,fbo,colorTex,depthTex,fontList,shadowFBO,shadowTex;
+static GLuint worldList,worldProgram,postProgram,depthProgram,fbo,colorTex,depthTex,fontList,shadowFBO,shadowTex,sphereList,bloomFBO,bloomTex[2],bloomProgram;
 static int rw,rh;
 static float lastFrameMS=16;
 static LARGE_INTEGER frequency,lastCounter;
@@ -73,7 +73,7 @@ static V3 add(V3 a,V3 b){return v3(a.x+b.x,a.y+b.y,a.z+b.z);}
 static V3 sub(V3 a,V3 b){return v3(a.x-b.x,a.y-b.y,a.z-b.z);}
 static V3 mul(V3 a,float t){return v3(a.x*t,a.y*t,a.z*t);}
 static float dot(V3 a,V3 b){return a.x*b.x+a.y*b.y+a.z*b.z;}
-static float length(V3 a){return (float)sqrt(dot(a,a));}
+static float length(V3 a){return (float)sqrtf(dot(a,a));}
 static V3 norm(V3 a){float l=length(a);return mul(a,1/MAX(l,.0001f));}
 static float rnd(void){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;return (rng&65535)/65535.f;}
 static float dsq(float x,float z){return x*x+z*z;}
@@ -130,63 +130,62 @@ static void resetGame(void){
     memset(parts,0,sizeof(parts));memset(bolts,0,sizeof(bolts));memset(seen,0,sizeof(seen));
     buildMap();player=cellpos(17,4);player.y=1.65f;yaw=0;pitch=0;vy=0;health=100;armor=50;
     for(int i=0;i<3;i++){ammo[i]=magazine[i];reserve[i]=i==0?180:i==1?40:24;}
-    weapon=0;grounded=1;gameTime=damageFlash=hitFlash=gunKick=shootCD=reloadTime=extraction=0;
+    weapon=0;grounded=1;gameTime=damageFlash=hitFlash=gunKick=shootCD=reloadTime=extraction=gateLift=0;
     note("REACTOR OFFLINE. SEVER ALL THREE RELAYS.");
 }
 
+/* UVs travel from the vertex shader; no inverse matrices per fragment. */
 static const char *sceneVS=
 "#version 120\n"
-"varying vec3 P,N;varying vec4 C;void main(){vec4 p=gl_ModelViewMatrix*gl_Vertex;P=p.xyz;N=normalize(gl_NormalMatrix*gl_Normal);C=gl_Color;gl_Position=gl_ProjectionMatrix*p;}";
+"varying vec3 P,N,W,B;varying vec4 C;void main(){vec4 p=gl_ModelViewMatrix*gl_Vertex;P=p.xyz;N=gl_NormalMatrix*gl_Normal;W=gl_Vertex.xyz;B=gl_Normal;C=gl_Color;gl_Position=gl_ProjectionMatrix*p;}";
 static const char *sceneFS=
 "#version 120\n"
-"varying vec3 P,N;varying vec4 C;uniform float time,flash,alert;uniform vec3 L0,L1,L2,L3,L4,L5,L6;uniform mat4 shadowM;uniform sampler2D shadow;"
-"float hash(vec3 p){return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453);}"
-"float noise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);}"
-"vec3 light(vec3 p,vec3 c,vec3 n,float rough){vec3 d=p-P;float l=length(d);vec3 v=normalize(-P);vec3 h=normalize(normalize(d)+v);return c*(max(dot(n,normalize(d)),0.)+pow(max(dot(n,h),0.),rough)*.65)/(1.+l*l*.045);}"
-"void main(){vec3 n=normalize(N);float mat=floor(C.a+.1);vec3 b=C.rgb;"
-"vec3 wp=(gl_ModelViewMatrixInverse*vec4(P,1)).xyz;vec3 wn=normalize((gl_ModelViewMatrixTranspose*vec4(n,0)).xyz);"
-"vec3 an=abs(wn);vec2 uv=an.y>an.x&&an.y>an.z?wp.xz:(an.x>an.z?wp.zy:wp.xy);"
-"float grit=noise(wp*3.)*.55+noise(wp*34.)*.25+hash(floor(wp*100.))*.2;float seam=1.;float rough=28.;"
-"if(mat<.5){vec2 u=fract(uv/1.4);float edge=min(min(u.x,1.-u.x),min(u.y,1.-u.y));seam=mix(.27,1.,smoothstep(.012,.034,edge));vec2 r=abs(u-.5);float bolt=length(r-vec2(.43));seam*=mix(.36,1.,smoothstep(.012,.023,bolt));b*=seam*(.68+grit*.6);float rib=step(.91,fract(uv.y*7.))*step(.36,u.x)*step(u.x,.64);b*=1.-rib*.35;}"
-"else if(mat<1.5){vec2 u=fract(uv*.714);float edge=min(min(u.x,1.-u.x),min(u.y,1.-u.y));float aa=fwidth(edge);b*=mix(.35,1.,smoothstep(.018-aa,.035+aa,edge))*(.67+grit*.55);rough=50.;}"
-"else if(mat<2.5){float stripe=step(.5,fract((uv.x+uv.y)*1.7));b=mix(vec3(.045,.06,.065),b,stripe)*(.6+grit*.6);}"
-"else if(mat<3.5){b*=.65+grit*.55;rough=70.;}"
-"else if(mat<4.5){b*=.58+.42*sin(uv.y*120.)*sin(uv.y*120.);}"
-"float bump=(noise(wp*42.)-.5)*.13;n=normalize(n+vec3(bump,bump*.3,-bump));"
-"vec3 lum=vec3(.19,.25,.29)+light(L0,vec3(.45,1.65,1.8),n,rough)+light(L1,vec3(2.5,1.25,.42),n,rough)+light(L2,vec3(.25,1.35,2.),n,rough)+light(L3,vec3(2.8,.45,.16),n,rough)+light(L4,vec3(.3,1.1,1.7),n,rough)+light(L5,vec3(1.9,.95,.36),n,rough);"
-"vec4 sp=shadowM*vec4(P,1);vec3 sc=sp.xyz/sp.w*.5+.5;float shade=0.;for(int j=0;j<4;j++){vec2 o=vec2(mod(float(j),2.),floor(float(j)/2.))-.5;shade+=step(sc.z-.0012,texture2D(shadow,sc.xy+o/1024.).r)*.25;}if(sc.x<0.||sc.x>1.||sc.y<0.||sc.y>1.||sp.w<0.)shade=1.;"
-"float torch=pow(max(dot(normalize(P),vec3(0,0,-1)),0.),16.);lum+=light(vec3(.35,.2,0),vec3(1.5,1.65,1.75)*torch*shade,n,rough);lum*=.65+.35*shade;lum+=light(L6,vec3(3.2,1.6,.3)*flash,n,rough);"
-"vec3 color=b*lum;if(mat>4.5){color=b*(1.7+.22*sin(time*2.+wp.y*3.));}"
-"float fog=1.-exp(-length(P)*.016);color=mix(color,vec3(.026,.043,.052),fog);gl_FragColor=vec4(color,1.);}";
+"varying vec3 P,N,W,B;varying vec4 C;uniform float time,flash,alert;uniform vec3 L0,L1,L2,L3,L4,L5,L6;uniform mat4 shadowM;uniform sampler2D shadow;"
+"float hash(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}"
+"float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}"
+"vec3 light(vec3 p,vec3 c,vec3 n,float rough,float metal){vec3 d=p-P;float d2=dot(d,d);d*=inversesqrt(max(d2,.001));vec3 v=normalize(-P),h=normalize(d+v);float nl=max(dot(n,d),0.);float spec=pow(max(dot(n,h),0.),rough)*(rough+8.)/48.;float fres=.08+metal*.35+(1.-metal*.35)*pow(1.-max(dot(v,h),0.),5.);return c*(nl+spec*fres)/(1.+d2*.038);}"
+"void main(){vec3 n=normalize(N),v=normalize(-P);float mat=floor(C.a+.1);vec3 b=C.rgb;vec3 an=abs(B);vec2 uv=an.y>an.x&&an.y>an.z?W.xz:(an.x>an.z?W.zy:W.xy);"
+"float grain=noise(uv*19.),dirt=noise(uv*.72),aa=max(fwidth(uv.x),fwidth(uv.y)),height=0.,rough=38.,metal=.4;float close=1.-smoothstep(.015,.15,aa);"
+"vec2 tile=fract(uv/1.4),edge=min(tile,1.-tile);float e=min(edge.x,edge.y);float seam=smoothstep(.012,.029+aa,e);float wear=1.-smoothstep(.018,.055+aa,e);"
+"if(mat<.5){float bolt=1.-smoothstep(.012,.019+aa,length(abs(tile-.5)-vec2(.43)));float rib=(1.-smoothstep(.08,.16+aa,abs(fract(uv.y*7.)-.5)))*step(.28,tile.x)*step(tile.x,.72);b*=mix(.28,1.,seam)*(1.-bolt*.72)*(1.-rib*.2)*(.68+dirt*.4);b=mix(b,vec3(.32,.27,.17),wear*(.15+.3*grain));height=seam*.028+grain*.003*close-bolt*.011;rough=35.+grain*35.;}"
+"else if(mat<1.5){float diamond=sin(uv.x*32.)*sin(uv.y*32.);float tread=smoothstep(.5,.8,diamond)*close;float wet=smoothstep(.5,.79,noise(uv*.38));b*=mix(.27,1.,seam)*(.64+dirt*.5);b=mix(b,b*.48,wet);height=seam*.008+tread*.003*(1.-wet);rough=mix(32.,145.,wet);metal=.55+wet*.4;}"
+"else if(mat<2.5){float stripe=smoothstep(.46-aa,.54+aa,fract((uv.x+uv.y)*1.7));float chip=smoothstep(.66,.85,grain);b=mix(vec3(.025,.035,.04),b,stripe);b=mix(b,vec3(.26,.24,.2),chip*.75);height=grain*.005*close;rough=28.;}"
+"else if(mat<3.5){float brushed=noise(uv*vec2(2.,90.));b*=.7+dirt*.25+brushed*.16*close;height=grain*.002*close;rough=65.;metal=.9;}"
+"else if(mat<4.5){b*=.65+.35*sin(uv.y*120.)*sin(uv.y*120.);rough=24.;}"
+"vec3 dx=dFdx(P),dy=dFdy(P),r1=cross(dy,n),r2=cross(n,dx);float det=dot(dx,r1);vec3 grad=sign(det)*(dFdx(height)*r1+dFdy(height)*r2);n=normalize(max(abs(det),.000001)*n-grad);"
+"vec3 lum=vec3(.085,.12,.14)+light(L0,vec3(.35,2.6,3.)*(.94+.06*sin(time*1.7)),n,rough,metal)+light(L1,vec3(3.5,1.6,.6),n,rough,metal)+light(L2,vec3(.2,2.,2.9),n,rough,metal)+light(L3,vec3(4.,.85,.22)*(.94+.06*sin(time*7.)),n,rough,metal)+light(L4,mix(vec3(.4,1.8,2.8),vec3(3.8,.45,.12),alert),n,rough,metal)+light(L5,vec3(2.5,1.2,.4),n,rough,metal);"
+"vec4 sp=shadowM*vec4(P,1);vec3 sc=sp.xyz/sp.w*.5+.5;float shade=0.;float bias=max(.00015,.0008*(1.-abs(dot(n,normalize(-P)))));for(int j=0;j<4;j++){vec2 o=vec2(mod(float(j),2.),floor(float(j)/2.))-.5;shade+=step(sc.z-bias,texture2D(shadow,sc.xy+o*.0015).r)*.25;}if(sc.x<0.||sc.x>1.||sc.y<0.||sc.y>1.||sp.w<0.)shade=1.;"
+"float torch=pow(max(dot(normalize(P),vec3(0,0,-1)),0.),19.);lum+=light(vec3(.35,.2,0),vec3(1.5,1.8,2.)*torch*shade,n,rough,metal);lum*=.7+.3*shade;lum+=light(L6,vec3(5.,1.4,.2)*flash,n,rough,metal);"
+"float fres=pow(1.-max(dot(n,v),0.),4.)*metal;vec3 env=mix(vec3(.025,.07,.09),vec3(.17,.25,.28),clamp(reflect(-v,n).y*.5+.5,0.,1.));vec3 col=b*lum+env*fres;"
+"if(mat>4.5){col=b*(2.6+.32*sin(time*2.+W.y*3.));}float fog=1.-exp(-length(P)*.009);col=mix(col,vec3(.018,.028,.04),fog);gl_FragColor=vec4(col,1.);}";
 static const char *postVS="#version 120\nvarying vec2 uv;void main(){uv=gl_MultiTexCoord0.xy;gl_Position=gl_Vertex;}";
 static const char *postFS=
 "#version 120\n"
-"varying vec2 uv;uniform sampler2D scene,depth;uniform vec2 pixel;uniform float time,hurt;"
-"float z(vec2 p){float d=texture2D(depth,p).r;return .16/(1.000889-d*.999111);}"
-"void main(){vec3 c=texture2D(scene,uv).rgb;float a=z(uv),occ=0.;vec3 glow=vec3(0);"
-"for(int i=0;i<8;i++){float t=float(i)*.785398;vec2 v=vec2(cos(t),sin(t));float d=z(uv+v*pixel*7.);occ+=step(.13,a-d)*exp(-abs(a-d)*.55);vec3 s=texture2D(scene,uv+v*pixel*5.).rgb;glow+=max(s-.65,0.);}"
-"c=c*(1.-occ*.032)+glow*.08;vec2 q=uv*2.-1.;c*=1.-dot(q,q)*.17;c=c/(c+vec3(.68));c=pow(c,vec3(.85));"
-"c=mix(c,vec3(.65,.045,.008),hurt*dot(q,q)*.45);float grain=fract(sin(dot(uv+time*.0001,vec2(12.9898,78.233)))*43758.5453);c+=(grain-.5)*.012;gl_FragColor=vec4(c,1);}";
+"varying vec2 uv;uniform sampler2D scene,depth,bloom;uniform vec2 pixel;uniform float time,hurt;"
+"float z(vec2 p){return .08/(1.-texture2D(depth,p).r*.9995556);}"
+"void main(){vec3 c=texture2D(scene,uv).rgb;float a=z(uv),occ=0.;"
+"for(int i=0;i<8;i++){float t=float(i)*.785398;vec2 v=vec2(cos(t),sin(t));float d=z(uv+v*pixel*9.);occ+=step(.09,a-d)*exp(-abs(a-d)*.8);}"
+"c=c*(1.-occ*.036)+texture2D(bloom,uv).rgb*.55;vec2 q=uv*2.-1.;c*=1.-dot(q,q)*.13;c=(c*(2.51*c+.03))/(c*(2.43*c+.59)+.14);c=pow(clamp(c,0.,1.),vec3(.4545));c=mix(c,vec3(.7,.035,.008),hurt*dot(q,q)*.4);float grain=fract(sin(dot(uv+time*.0001,vec2(12.9898,78.233)))*43758.5453);c+=(grain-.5)*.007;gl_FragColor=vec4(c,1);}";
+
+static const char *bloomFS=
+"#version 120\n"
+"varying vec2 uv;uniform sampler2D source;uniform vec2 step;uniform float cutoff;void main(){vec3 c=vec3(0);float sum=0.;for(int i=-6;i<=6;i++){float x=float(i),w=exp(-x*x*.1);c+=max(texture2D(source,uv+step*x).rgb-cutoff,0.)*w;sum+=w;}gl_FragColor=vec4(c/sum,1);}";
 
 static void color(float r,float g,float b,int mat){glColor4f(r,g,b,(float)mat);}
+/* Indexed cube corners keep the generator small without per-box matrix calls. */
 static void box(float x,float y,float z,float sx,float sy,float sz){
-    float a=x-sx*.5f,b=x+sx*.5f,c=y-sy*.5f,d=y+sy*.5f,e=z-sz*.5f,f=z+sz*.5f;
-    glBegin(GL_QUADS);
-    glNormal3f(0,0,-1);glVertex3f(a,c,e);glVertex3f(a,d,e);glVertex3f(b,d,e);glVertex3f(b,c,e);
-    glNormal3f(0,0,1);glVertex3f(b,c,f);glVertex3f(b,d,f);glVertex3f(a,d,f);glVertex3f(a,c,f);
-    glNormal3f(-1,0,0);glVertex3f(a,c,f);glVertex3f(a,d,f);glVertex3f(a,d,e);glVertex3f(a,c,e);
-    glNormal3f(1,0,0);glVertex3f(b,c,e);glVertex3f(b,d,e);glVertex3f(b,d,f);glVertex3f(b,c,f);
-    glNormal3f(0,1,0);glVertex3f(a,d,e);glVertex3f(a,d,f);glVertex3f(b,d,f);glVertex3f(b,d,e);
-    glNormal3f(0,-1,0);glVertex3f(a,c,f);glVertex3f(a,c,e);glVertex3f(b,c,e);glVertex3f(b,c,f);glEnd();
+    static const unsigned char faces[24]={0,2,3,1,5,7,6,4,4,6,2,0,1,3,7,5,2,6,7,3,4,0,1,5};
+    static const signed char normals[18]={0,0,-1,0,0,1,-1,0,0,1,0,0,0,1,0,0,-1,0};
+    glBegin(GL_QUADS);for(int f=0;f<6;f++){glNormal3f(normals[f*3],normals[f*3+1],normals[f*3+2]);for(int j=0;j<4;j++){int k=faces[f*4+j];glVertex3f(x+sx*((k&1)?.5f:-.5f),y+sy*((k&2)?.5f:-.5f),z+sz*((k&4)?.5f:-.5f));}}glEnd();
 }
 static void tube(float x,float y,float z,float radius,float h,int sides){
-    glBegin(GL_QUAD_STRIP);for(int i=0;i<=sides;i++){float a=i*2*PI/sides,c=cos(a),s=sin(a);glNormal3f(c,0,s);glVertex3f(x+c*radius,y-h*.5f,z+s*radius);glVertex3f(x+c*radius,y+h*.5f,z+s*radius);}glEnd();
-    for(int k=-1;k<=1;k+=2){glBegin(GL_TRIANGLE_FAN);glNormal3f(0,k,0);glVertex3f(x,y+k*h*.5f,z);for(int i=0;i<=sides;i++){float a=k*i*2*PI/sides;glVertex3f(x+cos(a)*radius,y+k*h*.5f,z+sin(a)*radius);}glEnd();}
+    glBegin(GL_QUAD_STRIP);for(int i=0;i<=sides;i++){float a=i*2*PI/sides,c=cosf(a),s=sinf(a);glNormal3f(c,0,s);glVertex3f(x+c*radius,y-h*.5f,z+s*radius);glVertex3f(x+c*radius,y+h*.5f,z+s*radius);}glEnd();
+    for(int k=-1;k<=1;k+=2){glBegin(GL_TRIANGLE_FAN);glNormal3f(0,k,0);glVertex3f(x,y+k*h*.5f,z);for(int i=0;i<=sides;i++){float a=k*i*2*PI/sides;glVertex3f(x+cosf(a)*radius,y+k*h*.5f,z+sinf(a)*radius);}glEnd();}
 }
 static void ring(float x,float y,float z,float radius,float thick,int sides){
-    glBegin(GL_QUADS);for(int i=0;i<sides;i++){float a=i*2*PI/sides,b=(i+1)*2*PI/sides;glNormal3f(0,1,0);glVertex3f(x+cos(a)*(radius-thick),y,z+sin(a)*(radius-thick));glVertex3f(x+cos(a)*radius,y,z+sin(a)*radius);glVertex3f(x+cos(b)*radius,y,z+sin(b)*radius);glVertex3f(x+cos(b)*(radius-thick),y,z+sin(b)*(radius-thick));}glEnd();
+    glBegin(GL_QUADS);for(int i=0;i<sides;i++){float a=i*2*PI/sides,b=(i+1)*2*PI/sides;glNormal3f(0,1,0);glVertex3f(x+cosf(a)*(radius-thick),y,z+sinf(a)*(radius-thick));glVertex3f(x+cosf(a)*radius,y,z+sinf(a)*radius);glVertex3f(x+cosf(b)*radius,y,z+sinf(b)*radius);glVertex3f(x+cosf(b)*(radius-thick),y,z+sinf(b)*(radius-thick));}glEnd();
 }
-static void beam(V3 a,V3 b,float radius){V3 d=sub(b,a);float l=length(d);glPushMatrix();glTranslatef(a.x,a.y,a.z);glRotatef(acos(CLAMP(d.y/MAX(l,.001),-1,1))*180/PI,d.z,0,-d.x);tube(0,l*.5f,0,radius,l,8);glPopMatrix();}
+static void beam(V3 a,V3 b,float radius){V3 d=sub(b,a);float l=length(d);if(l<.001f){box(a.x,a.y,a.z,radius*2,radius*2,radius*2);return;}glPushMatrix();glTranslatef(a.x,a.y,a.z);glRotatef(acosf(CLAMP(d.y/l,-1,1))*180/PI,d.z,0,-d.x);tube(0,l*.5f,0,radius,l,8);glPopMatrix();}
 static float ceiling(int x,int z){if(z>=29)return 10; if(x>=10&&x<=24&&z>=12&&z<=24)return 8.4;return 5.6;}
 static void sign3d(float x,float y,float z,float angle,float scale,const char *s){
     glPushMatrix();glTranslatef(x,y,z);glRotatef(angle,0,1,0);glScalef(scale,scale,scale);glListBase(fontList-32);glCallLists(strlen(s),GL_UNSIGNED_BYTE,s);glPopMatrix();
@@ -243,9 +242,9 @@ static void makeWorld(void){
         }else{
             color(.13,.18,.2,3);tube(x,.4,z,2.5,.8,16);tube(x,5.2,z,2.2,.65,16);
             color(.24,.3,.31,0);tube(x,2.8,z,1.25,4.4,16);
-            for(int j=0;j<8;j++){float a=j*PI/4;float px=x+sin(a)*1.85,pz=z+cos(a)*1.85;
+            for(int j=0;j<8;j++){float a=j*PI/4;float px=x+sinf(a)*1.85,pz=z+cosf(a)*1.85;
                 color(.21,.27,.28,3);tube(px,2.8,pz,.13,4.4,8);color(.07,.8,.95,5);tube(px,2.8,pz,.066,3.4,8);
-                color(.55,.3,.06,2);beam(v3(px,4.8,pz),v3(x+sin(a)*.9,5.8,z+cos(a)*.9),.18);
+                color(.55,.3,.06,2);beam(v3(px,4.8,pz),v3(x+sinf(a)*.9,5.8,z+cosf(a)*.9),.18);
             }
             color(.055,.9,1,5);for(int k=0;k<4;k++)tube(x,1.3+k,z,1.3,.08,24);
         }
@@ -261,6 +260,11 @@ static void makeWorld(void){
     for(int x=15;x<=19;x+=2){color(.19,.23,.24,3);beam(v3(x*CELL,7.6,12*CELL),v3(x*CELL,7.6,25*CELL),.13);}
     for(int z=30;z<40;z+=3){color(.2,.23,.25,3);box(17.5*CELL,9.5,z*CELL,17*CELL,.5,.6);
         for(int x=10;x<26;x+=3){color(.1,.5,.7,5);box(x*CELL,9.17,z*CELL,1.4,.05,.19);}}
+    for(int side=-1;side<=1;side+=2){float x=(17.5f+side*5.8f)*CELL;
+        color(.07,.12,.14,3);box(x,6.45,18.5f*CELL,.8,.18,34);
+        for(int z=13;z<25;z++){float zz=(z+.5f)*CELL;color(.21,.26,.27,3);box(x,6.8,zz,.065,.6,.065);box(x,6.45,zz,1.04,.07,.08);}
+        for(int k=0;k<3;k++){color(.16,.22,.24,3);beam(v3(x+(k-1)*.22f,6.62,13*CELL),v3(x+(k-1)*.22f,6.62,24*CELL),.064);}
+    }
     V3 e=cellpos(17,41);color(.025,.8,.6,5);box(e.x,.015,e.z,7.8,.02,3.8);
     color(.52,.67,.62,5);sign3d(18.85*CELL,3.2,8.98*CELL,180,.62,"REACTOR 09");
     color(.03,.48,.7,5);sign3d(9.98*CELL,4.1,16.98*CELL,90,.62,"01 / COOLANT");
@@ -335,11 +339,11 @@ static float traceWorld(V3 o,V3 d,float maxdist){
     for(int i=0;i<propCount;i++){Prop *p=props+i;float t=rayBox(o,d,v3(p->p.x-p->sx/2,0,p->p.z-p->sz/2),v3(p->p.x+p->sx/2,p->sy,p->p.z+p->sz/2));dist=MIN(dist,t);}
     return dist;
 }
-static V3 forward(void){return v3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));}
+static V3 forward(void){return v3(sinf(yaw)*cosf(pitch),sinf(pitch),cosf(yaw)*cosf(pitch));}
 static void look(float dx,float dy){yaw-=dx*mouseSensitivity;pitch=CLAMP(pitch-dy*mouseSensitivity,-1.4f,1.4f);}
 static void damageEnemy(int index,float damage,V3 impact){
     Enemy *e=enemies+index;e->hp-=damage;e->hit=.16;e->active=1;hitFlash=.15f;hitsMade++;particles(impact,7,0,2.5);
-    if(e->hp<=0){kills++;particles(add(e->p,v3(0,1,0)),35,1,7);sound(3,.75f,CLAMP((e->p.x-player.x)*.02,-.8,.8));
+    if(e->hp<=0){e->dead=gameTime;kills++;particles(add(e->p,v3(0,1,0)),35,1,7);sound(3,.75f,CLAMP((e->p.x-player.x)*.02,-.8,.8));
         if(e->type==3){bossDead=1;note("WARDEN DESTROYED. REACH THE GREEN EXTRACTION BAY.");sound(5,.9,0);}
         else if(rnd()<.5f)pickup(e->p.x,e->p.z,rnd()<.3f?0:1);
     }
@@ -354,7 +358,7 @@ static void fireWeapon(void){
         V3 d=forward();float spread=weapon==1?.055f:weapon==0?(mouseRight?.003:.012):.001f;
         d=norm(add(d,v3((rnd()-.5f)*spread,(rnd()-.5f)*spread,(rnd()-.5f)*spread)));
         float best=traceWorld(player,d,110);int hit=-1;
-        for(int i=0;i<enemyCount;i++){Enemy *e=enemies+i;if(e->hp<=0)continue;float h=e->type==3?4:e->type==1?1.0f:1.9f,r=e->type==3?1.65f:e->type==2?.8f:.5f;float y=e->type==1?1.4f+sin(totalTime*2+e->phase)*.2f:0;
+        for(int i=0;i<enemyCount;i++){Enemy *e=enemies+i;if(e->hp<=0)continue;float h=e->type==3?4:e->type==1?1.0f:1.9f,r=e->type==3?1.65f:e->type==2?.8f:.5f;float y=e->type==1?1.4f+sinf(totalTime*2+e->phase)*.2f:0;
             float t=rayBox(player,d,v3(e->p.x-r,y,e->p.z-r),v3(e->p.x+r,y+h,e->p.z+r));if(t<best){best=t;hit=i;}}
         V3 hitPos=add(player,mul(d,best));
         if(hit>=0)damageEnemy(hit,weapon==0?22:weapon==1?14:130,hitPos);else particles(hitPos,weapon==2?14:3,0,2.4);
@@ -377,14 +381,15 @@ static void interact(void){
     }
 }
 static void simulate(float dt){
+    gateLift=MIN(6,gateLift+(relayCount==3?dt*3:0));
     gameTime+=dt;shootCD=decay(shootCD,dt);damageFlash=decay(damageFlash,dt*1.5f);hitFlash=decay(hitFlash,dt);gunKick=decay(gunKick,dt*8);shake=decay(shake,dt);toastTime=decay(toastTime,dt);
     if(reloadTime>0){reloadTime-=dt;if(reloadTime<=0){reloadTime=0;int n=MIN(reserve[weapon],magazine[weapon]-ammo[weapon]);ammo[weapon]+=n;reserve[weapon]-=n;sound(4,.35,0);}}
     for(int i=0;i<3;i++)if(pressed['1'+i]){weapon=i;reloadTime=0;shootCD=.18;}
     if(pressed['R'])reloadWeapon();if(pressed['E'])interact();
     if(keys[VK_LEFT])yaw+=dt*1.8;if(keys[VK_RIGHT])yaw-=dt*1.8;if(keys[VK_UP])pitch=MIN(1.35,pitch+dt);if(keys[VK_DOWN])pitch=MAX(-1.35,pitch-dt);
-    float dx=(keys['D']?1.f:0)-(keys['A']?1.f:0),dz=(keys['W']?1.f:0)-(keys['S']?1.f:0),m=sqrt(dx*dx+dz*dz);
+    float dx=(keys['D']?1.f:0)-(keys['A']?1.f:0),dz=(keys['W']?1.f:0)-(keys['S']?1.f:0),m=sqrtf(dx*dx+dz*dz);
     float speed=keys[VK_SHIFT]?8.4f:5.4f;if(keys[VK_CONTROL])speed=2.8f;
-    if(m>0){dx=dx/m*speed*dt;dz=dz/m*speed*dt;moveBody(&player,-dx*cos(yaw)+dz*sin(yaw),dz*cos(yaw)+dx*sin(yaw),.33f);
+    if(m>0){dx=dx/m*speed*dt;dz=dz/m*speed*dt;moveBody(&player,-dx*cosf(yaw)+dz*sinf(yaw),dz*cosf(yaw)+dx*sinf(yaw),.33f);
         float old=stepPhase;stepPhase+=dt*(keys[VK_SHIFT]?14:9);if((int)(old/PI)!=(int)(stepPhase/PI)&&grounded)sound(4,.22,0);}
     if(pressed[VK_SPACE]&&grounded){vy=5.2;grounded=0;sound(4,.15,0);}
     vy-=dt*16;player.y+=vy*dt;float eye=keys[VK_CONTROL]?1.05f:1.65f;if(player.y<eye){player.y=eye;vy=0;grounded=1;}
@@ -393,19 +398,20 @@ static void simulate(float dt){
     int px=(int)(player.x/CELL),pz=(int)(player.z/CELL);for(int z=MAX(0,pz-4);z<MIN(MH,pz+5);z++)for(int x=MAX(0,px-4);x<MIN(MW,px+5);x++)seen[z][x]=1;
     if(pz>=29&&!bossAwake){bossAwake=1;note("CONTAINMENT FAILURE. ELIMINATE THE WARDEN.");sound(6,1,0);}
     for(int i=0;i<enemyCount;i++){
-        Enemy *e=enemies+i;if(e->hp<=0)continue;e->hit=decay(e->hit,dt);e->cd-=dt;
+        Enemy *e=enemies+i;e->fire=decay(e->fire,dt*8);if(e->hp<=0)continue;e->hit=decay(e->hit,dt);e->cd-=dt;V3 oldPos=e->p;
         V3 dif=sub(player,e->p);dif.y=0;float dist=length(dif);int sight=dist<45&&clearSight(add(e->p,v3(0,1.5,0)),player);
         if(e->type==3){if(!bossAwake)continue;e->active=1;}
         else if(sight&&dist<27)e->active=1;
-        if(!e->active)continue;e->yaw=atan2(dif.x,dif.z)*180/PI;
+        if(!e->active)continue;float turn=atan2f(dif.x,dif.z)*180/PI-e->yaw;e->yaw+=(fmod(turn+540,360)-180)*MIN(1,dt*7);
         if(dist>(e->type==3?14:e->type==2?5:9)||!sight){
             V3 target=player;int x=(int)(e->p.x/CELL),z=(int)(e->p.z/CELL);
             if(!sight&&x>=0&&x<MW&&z>=0&&z<MH){int best=distmap[z][x];for(int d=0;d<4;d++){int nx=x+(d==0)-(d==1),nz=z+(d==2)-(d==3);if(!solid(nx,nz)&&distmap[nz][nx]<best){best=distmap[nz][nx];target=cellpos(nx,nz);}}}
             V3 dir=sub(target,e->p);dir.y=0;dir=norm(dir);float es=e->type==1?3.8f:e->type==2?2.1f:e->type==3?1.5f:2.7f;
             V3 before=e->p;moveBody(&e->p,dir.x*dt*es,dir.z*dt*es,e->type==3?1.2f:.38f);
             if(length(sub(before,e->p))<dt*.2f)moveBody(&e->p,dir.z*dt*es,-dir.x*dt*es,.38f);
-        }else if(e->type==1){moveBody(&e->p,cos(totalTime+e->phase)*dt*1.3,sin(totalTime+e->phase)*dt*1.3,.38);}
-        if(sight&&e->cd<=0&&dist<38){
+        }else if(e->type==1){moveBody(&e->p,cosf(totalTime+e->phase)*dt*1.3,sinf(totalTime+e->phase)*dt*1.3,.38);}
+        float stride=length(sub(e->p,oldPos));e->gait+=stride*4;e->speed+=(MIN(1,stride/MAX(dt,.001)) -e->speed)*MIN(1,dt*10);
+        if(sight&&e->cd<=0&&dist<38){e->fire=1;
             V3 from=add(e->p,v3(0,e->type==3?2.6f:e->type==1?1.9f:1.3f,0));V3 target=player;
             if(e->type==3){for(int j=-2;j<=2;j++)makeBolt(from,add(target,v3(j*1.8f,0,-j*.3f)),13,i);e->cd=e->hp<600?.9f:1.5f;}
             else{target.x+=(rnd()-.5f)*1.2f;target.z+=(rnd()-.5f)*1.2f;makeBolt(from,target,e->type==1?13:11,i);e->cd=e->type==2?.9f:1.7f+rnd()*.4f;}
@@ -430,25 +436,41 @@ static void simulate(float dt){
     memset(pressed,0,sizeof(pressed));
 }
 
-static void orb(float x,float y,float z,float r){
-    for(int j=0;j<6;j++){float a=-PI/2+j*PI/6,b=a+PI/6;glBegin(GL_QUAD_STRIP);for(int i=0;i<=12;i++){float t=i*PI/6;
-        glNormal3f(cos(a)*cos(t),sin(a),cos(a)*sin(t));glVertex3f(x+r*cos(a)*cos(t),y+r*sin(a),z+r*cos(a)*sin(t));
-        glNormal3f(cos(b)*cos(t),sin(b),cos(b)*sin(t));glVertex3f(x+r*cos(b)*cos(t),y+r*sin(b),z+r*cos(b)*sin(t));}glEnd();}
+/* A generated sphere mesh is reused by every joint, eye and projectile. */
+static void makeMeshes(void){
+    sphereList=glGenLists(1);glNewList(sphereList,GL_COMPILE);
+    for(int j=0;j<12;j++){float a=-PI/2+j*PI/12,b=a+PI/12;glBegin(GL_QUAD_STRIP);for(int i=0;i<=24;i++){float t=i*PI/12;float x=cosf(a)*cosf(t),y=sinf(a),z=cosf(a)*sinf(t);glNormal3f(x,y,z);glVertex3f(x,y,z);x=cosf(b)*cosf(t);y=sinf(b);z=cosf(b)*sinf(t);glNormal3f(x,y,z);glVertex3f(x,y,z);}glEnd();}glEndList();
 }
+static void orb(float x,float y,float z,float r){glPushMatrix();glTranslatef(x,y,z);glScalef(r,r,r);glCallList(sphereList);glPopMatrix();}
+/* Small part tables replace repeated code and preserve all model detail. */
+static void panels(const signed char *p,int count,float scale){
+    static const unsigned char palette[][4]={{16,24,29,3},{78,94,99,0},{105,124,128,3},{156,81,16,2},{12,180,210,5},{230,115,18,5},{215,25,5,5},{46,60,62,4}};
+    for(int i=0;i<count;i++,p+=7){const unsigned char *c=palette[(int)p[6]];color(c[0]/255.f,c[1]/255.f,c[2]/255.f,c[3]);box(p[0]*scale,p[1]*scale,p[2]*scale,p[3]*scale,p[4]*scale,p[5]*scale);}
+}
+static int visibleEnemy(const Enemy *e){
+    float x=e->p.x-player.x,z=e->p.z-player.z,d=x*x+z*z;
+    return d<85*85&&(fabs(pitch)>.6f||(x*sinf(yaw)+z*cosf(yaw)+4)>MIN(.3f,height/(float)width)*sqrtf(d));
+}
+
 static void drawEnemy(Enemy *e){
     glPushMatrix();glTranslatef(e->p.x,e->p.y,e->p.z);glRotatef(e->yaw,0,1,0);
-    float anim=sin(totalTime*7+e->phase)*(e->active?.25f:.04f);
+    float anim=sinf(e->gait+e->phase)*e->speed*.25f;
+    if(e->hp<=0){float fall=CLAMP((gameTime-e->dead)*2.8f,0,1);glTranslatef(0,-fall*.2f,0);glRotatef(fall*82,1,0,0);}
+    else glTranslatef(0,sinf(e->gait*2)*e->speed*.028f,0);
     if(e->type==3){
         color(.1,.15,.17,3);tube(0,1.45,0,1.35,1.35,12);color(.42,.45,.38,0);tube(0,2.05,0,1.15,1.05,8);
         color(.09,.13,.15,3);tube(0,2.85,0,.8,.45,8);color(.9,.13,.025,5);orb(0,2.66,.84,.44);
-        color(.6,.3,.05,2);for(int k=0;k<4;k++){float a=k*PI/2+.4f;beam(v3(sin(a)*.8,2.5,cos(a)*.8),v3(sin(a)*1.35,1,cos(a)*1.35),.25);}
-        for(int k=0;k<6;k++){float a=k*PI/3;V3 p=v3(sin(a)*1.1,1.6,cos(a)*1.1),q=v3(sin(a)*2.1,1.35+anim*(k%2?1:-1),cos(a)*2.1),r=v3(sin(a)*2.5,.15,cos(a)*2.5);
-            color(.22,.27,.28,3);beam(p,q,.17);beam(q,r,.11);orb(q.x,q.y,q.z,.23);color(.8,.22,.025,5);orb(p.x,p.y,p.z,.1);color(.4,.42,.37,0);box(r.x,.13,r.z,.46,.22,.65);}
-        color(.09,.11,.13,3);for(int k=-1;k<=1;k+=2){box(k*1.15,2.2,.4,.44,.5,1.65);color(.9,.12,.01,5);box(k*1.15,2.2,1.27,.22,.22,.07);color(.09,.11,.13,3);}
+        color(.18,.26,.29,3);for(int j=0;j<3;j++){tube(0,1.05+j*.37,0,1.43,.065,24);}
+        for(int j=0;j<10;j++){float a=j*PI/5;color(.22,.3,.32,3);box(sinf(a)*.96,2.62,cosf(a)*.96,.12,.6,.12);}
+        glPushMatrix();glTranslatef(0,2.66,.86);glRotatef(90,1,0,0);color(.055,.1,.12,3);ring(0,0,0,.54,.12,32);glPopMatrix();
+        color(.6,.3,.05,2);for(int k=0;k<4;k++){float a=k*PI/2+.4f;beam(v3(sinf(a)*.8,2.5,cosf(a)*.8),v3(sinf(a)*1.35,1,cosf(a)*1.35),.25);}
+        for(int k=0;k<6;k++){float a=k*PI/3,step=sinf(e->gait+k*PI)*e->speed;V3 p=v3(sinf(a)*1.1,1.6,cosf(a)*1.1),q=v3(sinf(a)*2.1,1.35+step*.22,cosf(a)*2.1),r=v3(sinf(a)*2.5,.15+MAX(0,step)*.45,cosf(a)*2.5+step*.35);
+            color(.22,.27,.28,3);beam(p,q,.17);beam(q,r,.11);color(.58,.64,.64,3);beam(add(p,v3(0,.17,0)),add(q,v3(0,.17,0)),.055);orb(q.x,q.y,q.z,.23);color(.8,.22,.025,5);orb(p.x,p.y,p.z,.1);color(.4,.42,.37,0);box(r.x,r.y,r.z,.46,.22,.65);}
+        color(.09,.11,.13,3);for(int k=-1;k<=1;k+=2){box(k*1.15,2.2,.4-e->fire*.22,.44,.5,1.65);color(.9,.12,.01,5);box(k*1.15,2.2,1.27-e->fire*.22,.22,.22,.07);if(e->fire>.45f)orb(k*1.15,2.2,1.45,.23*e->fire);color(.09,.11,.13,3);}
     }else if(e->type==1){
-        glTranslatef(0,1.8+sin(totalTime*2+e->phase)*.2f,0);color(.12,.19,.23,3);orb(0,0,0,.42);color(.4,.5,.5,0);box(0,.05,-.1,.7,.25,.6);
+        glTranslatef(0,1.8+sinf(totalTime*2+e->phase)*.2f,0);color(.12,.19,.23,3);orb(0,0,0,.42);color(.4,.5,.5,0);box(0,.05,-.1,.7,.25,.6);
         color(.85,.17,.03,5);box(0,.04,.36,.36,.09,.04);
-        for(int k=-1;k<=1;k+=2){color(.16,.2,.23,3);box(k*.6,0,0,.6,.13,.4);tube(k*.72,-.04,0,.22,.18,12);color(.02,.75,1,5);tube(k*.72,-.14,0,.13,.035,12);}
+        for(int k=-1;k<=1;k+=2){color(.16,.2,.23,3);box(k*.6,0,0,.6,.13,.4);tube(k*.72,-.04,0,.22,.18,12);color(.02,.75,1,5);tube(k*.72,-.14,0,.13,.035,12);glPushMatrix();glTranslatef(k*.72,.07,0);glRotatef(totalTime*900*k,0,1,0);color(.36,.43,.44,3);box(0,0,0,.52,.025,.05);box(0,0,0,.05,.025,.52);glPopMatrix();}
         color(.07,.09,.11,3);box(0,-.2,.4,.15,.17,.4);
     }else{
         if(e->type==2)glScalef(1.35,1.1,1.2);
@@ -457,30 +479,49 @@ static void drawEnemy(Enemy *e){
             color(.4,.42,.36,0);box(k*.28,.14,.08-swing,.28,.22,.46);box(k*.24,.61,swing*.7,.25,.36,.28);
             color(.15,.2,.21,3);orb(k*.27,.42,swing,.14);
         }
-        color(e->hit>0?.8:.28,e->hit>0?.6:.33,e->hit>0?.35:.32,0);box(0,1.18,0,.72,.66,.46);
-        color(.08,.115,.13,3);box(0,1.15,.26,.54,.35,.12);box(0,1.35,-.32,.52,.64,.22);
-        color(.7,.34,.05,2);box(0,1.43,.33,.66,.16,.08);
-        color(.14,.19,.2,3);tube(0,1.59,0,.11,.13,8);box(0,1.79,.02,.43,.36,.4);
-        color(.85,.08,.02,5);box(0,1.8,.231,.32,.061,.03);color(.07,.11,.13,3);box(0,1.93,.04,.47,.06,.42);
+        static const signed char armorParts[][7]={
+            {0,47,0,29,26,18,1},{0,46,11,22,14,5,0},{0,54,-13,21,26,9,1},
+            {0,57,13,27,6,3,3},{0,72,1,17,14,16,1},{0,72,10,13,2,1,6},
+            {0,78,1,19,2,17,0},{-10,70,1,4,9,11,2},{10,70,1,4,9,11,2},
+            {-7,52,13,6,8,2,2},{7,52,13,6,8,2,2},{0,37,1,17,5,16,0},
+            {0,63,-2,9,6,9,0},{0,43,13,12,3,2,3},{0,49,-18,10,14,2,0},
+            {-5,52,-19,2,9,1,4},{5,52,-19,2,9,1,4}};
+        panels(&armorParts[0][0],sizeof(armorParts)/7,.025);
+        if(e->hit>0){color(1,.32,.02,5);box(0,1.3,.342,.15,.12,.012);}
         for(int k=-1;k<=1;k+=2){color(.35,.38,.32,0);orb(k*.47,1.42,0,.22);color(.12,.16,.17,3);beam(v3(k*.46,1.35,0),v3(k*.5,1,.23),.13);beam(v3(k*.5,1,.23),v3(k*.3,1.15,.64),.12);}
-        color(.06,.08,.1,3);box(.3,1.14,.7,.25,.25,.7);color(.9,.15,.025,5);box(.3,1.14,1.06,.13,.13,.02);
+        color(.06,.08,.1,3);box(.3,1.14,.7-e->fire*.09,.25,.25,.7);
+        color(.9,.15,.025,5);box(.3,1.14,1.06-e->fire*.09,.13,.13,.02);
+        if(e->fire>.45f){color(1,.4,.05,5);orb(.3,1.14,1.2,.16*e->fire);}
     }
     glPopMatrix();
 }
+static void drawMachinery(void){
+    for(int i=0;i<6;i++){float x=(i%2?24.8f:10.2f)*CELL,z=(14.5f+(i/2)*4)*CELL;
+        glPushMatrix();glTranslatef(x,4.7,z);glRotatef(i%2?-90:90,0,1,0);glRotatef(90,1,0,0);
+        color(.11,.16,.18,3);ring(0,0,0,.95,.15,24);ring(0,.13,0,.84,.045,24);
+        glRotatef(totalTime*(i%2?150:-150),0,1,0);color(.3,.37,.38,3);
+        for(int k=0;k<5;k++){glRotatef(72,0,1,0);box(.4,0,0,.67,.065,.18);}color(.55,.3,.08,3);tube(0,0,0,.18,.2,12);glPopMatrix();
+    }
+    V3 p=cellpos(17,18);
+    for(int j=0;j<3;j++){glPushMatrix();glTranslatef(p.x,1.2f+j*1.45f,p.z);glRotatef(totalTime*(j%2?22:-22),0,1,0);
+        for(int k=0;k<6;k++){glRotatef(60,0,1,0);color(.12,.23,.26,3);box(2.1,0,0,.15,.3,.64);color(.02,.8,1,5);box(2.19,0,0,.015,.12,.42);}
+        glPopMatrix();}
+}
 static void drawDynamic(void){
-    for(int i=0;i<enemyCount;i++)if(enemies[i].hp>0&&dsq(enemies[i].p.x-player.x,enemies[i].p.z-player.z)<85*85)drawEnemy(enemies+i);
+    drawMachinery();
+    for(int i=0;i<enemyCount;i++)if((enemies[i].hp>0||gameTime-enemies[i].dead<8)&&visibleEnemy(enemies+i))drawEnemy(enemies+i);
     for(int i=0;i<3;i++){
         Relay *r=relays+i;float x=r->p.x,z=r->p.z;
         color(.13,.18,.19,3);box(x,.58,z,1.25,1.16,1.0);color(.34,.39,.39,0);box(x,1.27,z,1.5,.3,1.2);
         color(.025,r->on?.8:.38,r->on?.35:.95,5);box(x,1.44,z,1.25,.022,.82);
         for(int k=0;k<3;k++){color(.6,.3,.05,2);tube(x+(k-1)*.37,1.82,z,.13,.7,8);color(.02,r->on?.4:.85,r->on?.15:1,5);tube(x+(k-1)*.37,1.86,z,.08,.45,8);}
-        if(!r->on){glPushMatrix();glTranslatef(x,2.7+sin(totalTime*2)*.12,z);glRotatef(totalTime*35,0,1,0);color(.04,.9,1,5);box(0,0,0,.22,.22,.22);glPopMatrix();}
+        if(!r->on){glPushMatrix();glTranslatef(x,2.7+sinf(totalTime*2)*.12,z);glRotatef(totalTime*35,0,1,0);color(.04,.9,1,5);box(0,0,0,.22,.22,.22);glPopMatrix();}
     }
-    float gateX=17.5*CELL,gateZ=28.5*CELL,raise=relayCount==3?6:0;
+    float gateX=17.5*CELL,gateZ=28.5*CELL,raise=gateLift;
     color(.22,.29,.3,0);box(gateX,2.8+raise,gateZ,8.4,5.6,.55);color(.7,.32,.045,2);box(gateX,1.1+raise,gateZ-.3,8.1,.55,.07);
     color(relayCount==3?.05:.85,relayCount==3?.8:.1,.04,5);box(gateX,3.7+raise,gateZ-.31,4,.065,.06);
     for(int i=0;i<pickupCount;i++)if(pickups[i].active){
-        Pickup *p=pickups+i;glPushMatrix();glTranslatef(p->p.x,.55+sin(totalTime*2+i)*.12,p->p.z);glRotatef(totalTime*35+i*41,0,1,0);
+        Pickup *p=pickups+i;glPushMatrix();glTranslatef(p->p.x,.55+sinf(totalTime*2+i)*.12,p->p.z);glRotatef(totalTime*35+i*41,0,1,0);
         color(.07,.13,.15,3);box(0,0,0,.55,.45,.5);
         if(p->type==0){color(.12,.9,.5,5);box(0,0,-.258,.32,.09,.02);box(0,0,-.27,.1,.3,.02);}
         else if(p->type==1){color(.95,.48,.045,5);for(int j=0;j<3;j++)box((j-1)*.14,0,-.265,.055,.28,.03);}
@@ -491,34 +532,47 @@ static void drawDynamic(void){
     V3 p=cellpos(17,18);glPushMatrix();glTranslatef(p.x,3.2,p.z);glRotatef(totalTime*17,0,1,0);glRotatef(24,1,0,0);color(.1,.6,.72,5);ring(0,0,0,2.4,.025,48);glPopMatrix();
     for(int i=0;i<96;i++)if(bolts[i].life>0){Bolt *b=bolts+i;color(1,.17,.025,5);orb(b->p.x,b->p.y,b->p.z,.11);color(.8,.3,.02,5);beam(b->p,sub(b->p,mul(norm(b->v),.6)),.034);}
     glEnable(GL_BLEND);glBlendFunc(GL_ONE,GL_ONE);glDepthMask(GL_FALSE);
-    for(int i=0;i<MAXP;i++)if(parts[i].life>0){Particle *p=parts+i;float f=p->life/p->maxlife;if(p->type==2)color(.05*f,.55*f,.8*f,5);else color(.9*f,.38*f,.065*f,5);box(p->p.x,p->p.y,p->p.z,p->size,p->size*2,p->size);}
-    for(int i=0;i<85;i++){float x=player.x+sin(i*47.31)*13,z=player.z+cos(i*17.37)*13,y=fmod(i*.33+totalTime*.14,5.5);if(!wallAt(x,z)){color(.085,.13,.14,5);box(x,y,z,.012,.018,.012);}}
+    for(int i=0;i<MAXP;i++)if(parts[i].life>0){Particle *p=parts+i;float f=p->life/p->maxlife;if(p->type==2)color(.05*f,.55*f,.8*f,5);else color(.9*f,.38*f,.065*f,5);beam(p->p,sub(p->p,mul(p->v,.026f)),p->size*.55f);}
+    for(int i=0;i<85;i++){float x=player.x+sinf(i*47.31)*13,z=player.z+cosf(i*17.37)*13,y=fmod(i*.33+totalTime*.14,5.5);if(!wallAt(x,z)){color(.085,.13,.14,5);box(x,y,z,.012,.018,.012);}}
     glDepthMask(GL_TRUE);glDisable(GL_BLEND);
 }
 static void drawWeapon(void){
-    glMatrixMode(GL_MODELVIEW);glLoadIdentity();glTranslatef(mouseRight?.08:.42,-.39f+sin(stepPhase)*.008f-gunKick*.027f,-.83+gunKick*.07f);
-    if(reloadTime>0){glTranslatef(0,-.24f*sin(reloadTime*2.2),.05);glRotatef(25*sin(reloadTime*2.2),0,0,1);}
-    glRotatef(gunKick*5,1,0,0);glScalef(.8,.8,.8);
-    /* Gloves and forearms. */
-    color(.14,.18,.19,3);beam(v3(.09,-.26,.58),v3(.03,-.14,.18),.115);beam(v3(-.52,-.33,.51),v3(-.18,-.1,-.35),.095);
-    color(.22,.27,.28,0);box(.035,-.13,.17,.19,.2,.22);box(-.17,-.065,-.36,.21,.16,.24);
-    color(.045,.075,.09,3);box(0,0,0,.27,.23,.72);box(0,.04,.4,.2,.21,.38);box(0,-.18,.12,.13,.31,.18);
-    color(.31,.37,.38,0);box(0,.1,-.09,.31,.11,.62);color(.14,.18,.19,3);box(0,-.07,-.45,.29,.19,.32);
-    color(.58,.31,.055,2);box(.157,.04,-.12,.013,.11,.39);
-    color(.09,.13,.15,3);box(0,.192,.04,.06,.075,.47);
-    for(int i=0;i<7;i++){box(0,.234,.25-i*.074,.12,.015,.034);box(.155,.04,-.3+i*.06,.025,.085,.018);}
+    static const signed char receiver[][7]={
+        {4,-13,17,19,20,22,7},{-17,-7,-36,21,16,24,7},
+        {0,0,0,27,23,72,0},{0,4,40,20,21,38,0},{0,-18,12,13,31,18,7},
+        {0,10,-9,31,11,62,1},{0,-7,-45,29,19,32,1},{16,4,-12,2,11,39,3},
+        {0,19,4,6,8,47,0},{-16,3,-10,2,12,43,1},{0,-9,55,22,9,8,7},
+        {0,7,55,22,10,6,1},{0,-9,-24,20,9,18,0},{0,5,-45,32,11,6,2},
+        {8,-20,15,2,26,9,2},{-8,-20,15,2,26,9,2},{0,-33,16,18,4,15,0}};
+    static const signed char carbine[][7]={
+        {0,-27,-15,15,36,25,0},{0,-30,-15,16,13,26,1},
+        {0,24,-14,18,4,14,0},{-8,31,-14,3,12,14,0},{8,31,-14,3,12,14,0},
+        {0,38,-14,18,3,14,0},{0,31,-8,1,5,1,4},{0,31,-8,5,1,1,4},
+        {0,4,-68,14,12,22,1},{0,12,-78,3,13,4,0}};
+    static const signed char shotgun[][7]={{0,-5,-62,26,17,36,7},{0,-18,-18,16,20,24,1},{0,16,-85,3,6,3,5}};
+    static const signed char ion[][7]={{0,3,-59,35,28,70,1},{0,18,-59,18,2,60,4},{0,3,-96,18,16,2,4},{0,-19,-30,23,22,30,0}};
+    glMatrixMode(GL_MODELVIEW);glLoadIdentity();glTranslatef(mouseRight?.02f:.39f,-.41f+sinf(stepPhase)*.012f-gunKick*.027f,-.86f+gunKick*.075f);
+    glRotatef(sinf(stepPhase*.5f)*.55f,0,0,1);
+    if(reloadTime>0){float t=sinf(CLAMP(reloadTime/(weapon==1?1.6f:1.35f),0,1)*PI);glTranslatef(0,-.22f*t,.07f*t);glRotatef(32*t,0,0,1);}
+    glRotatef(gunKick*6,1,0,0);glScalef(.8,.8,.8);
+    color(.14,.18,.19,4);beam(v3(.09,-.26,.58),v3(.03,-.14,.18),.115);beam(v3(-.52,-.33,.51),v3(-.18,-.1,-.35),.095);
+    panels(&receiver[0][0],sizeof(receiver)/7,.01);
+    color(.085,.12,.14,3);for(int i=0;i<7;i++){box(0,.234,.25-i*.074,.12,.015,.034);box(.169,.04,-.3+i*.06,.025,.08,.022);}
+    color(.44,.48,.48,3);for(int i=0;i<4;i++)orb(-.178,.095,.15-i*.13,.022);
+    color(.15,.21,.23,3);box(-.175,.04,.06+gunKick*.16,.04,.045,.23);
     if(weapon==0){
+        panels(&carbine[0][0],sizeof(carbine)/7,.01);
         color(.23,.28,.29,3);beam(v3(0,0,-.58),v3(0,0,-1.15),.059);color(.06,.085,.1,3);beam(v3(0,0,-1.02),v3(0,0,-1.22),.092);
-        color(.08,.12,.14,3);box(0,-.27,-.15,.155,.36,.25);color(.25,.31,.33,0);box(0,-.3,-.15,.159,.13,.255);
-        color(.045,.085,.1,3);box(0,.25,-.14,.16,.16,.13);color(.055,.7,.75,5);box(0,.253,-.071,.092,.071,.006);
+        if(reloadTime>0){color(.14,.2,.22,3);box(0,-.27-sinf(reloadTime*2.2)*.22,-.15,.155,.3,.25);}
     }else if(weapon==1){
+        panels(&shotgun[0][0],sizeof(shotgun)/7,.01);
         for(int k=-1;k<=1;k+=2){color(.23,.27,.29,3);beam(v3(k*.064,.025,-.49),v3(k*.064,.025,-1.02),.067);color(.03,.045,.05,3);beam(v3(k*.064,.025,-1.021),v3(k*.064,.025,-1.027),.047);}
-        color(.4,.23,.095,0);box(0,-.055,-.62,.26,.17,.36);for(int j=0;j<6;j++){color(.075,.1,.11,3);box(0,-.058,-.49-j*.05,.275,.176,.014);}
+        for(int j=0;j<6;j++){color(.075,.1,.11,3);box(0,-.058,-.49-j*.05+gunKick*.1,.275,.176,.014);}
         color(.66,.26,.04,3);for(int j=0;j<4;j++)beam(v3(.21,.02,-.26+j*.11),v3(.21,.12,-.26+j*.11),.035);
     }else{
-        color(.17,.24,.28,3);box(0,.03,-.59,.35,.28,.7);color(.045,.7,1,5);box(0,.18,-.59,.18,.013,.6);
+        panels(&ion[0][0],sizeof(ion)/7,.01);
         for(int j=0;j<5;j++){color(.25,.32,.34,3);box(0,.025,-.31-j*.145,.39,.34,.045);}
-        color(.07,.8,1,5);box(0,.03,-.956,.18,.16,.017);color(.06,.1,.12,3);box(0,-.19,-.3,.23,.22,.3);
+        glPushMatrix();glTranslatef(0,.03,-.78);glRotatef(90,1,0,0);glRotatef(totalTime*110,0,1,0);color(.01,.55+gunKick*.4,.8,5);ring(0,0,0,.22,.025,24);glPopMatrix();
     }
     if(gunKick>.5f){glEnable(GL_BLEND);glBlendFunc(GL_ONE,GL_ONE);glDepthMask(GL_FALSE);color(weapon==2?.05:1,weapon==2?.8:.6,weapon==2?1:.12,5);orb(0,.01,weapon==0?-1.32:-1.12,.09+gunKick*.07);glDepthMask(GL_TRUE);glDisable(GL_BLEND);}
 }
@@ -536,7 +590,7 @@ static void drawMap(float x,float y,float scale,int full){
     rect(x-10,y-10,MW*scale+20,MH*scale+20,.015,.035,.04,.83);
     for(int z=0;z<MH;z++)for(int xx=0;xx<MW;xx++)if((seen[z][xx]||full)&&map[z][xx]!=1)rect(x+xx*scale,y+(MH-z-1)*scale,scale-.5f,scale-.5f,.15,.25,.27,.8);
     for(int i=0;i<3;i++)rect(x+relays[i].p.x/CELL*scale-2,y+(MH-relays[i].p.z/CELL)*scale-2,4,4,relays[i].on?.15:1,relays[i].on?.8:.54,.12,1);
-    float a=x+player.x/CELL*scale,b=y+(MH-player.z/CELL)*scale;rect(a-2,b-2,4,4,.8,1,1,1);line2(a,b,a+sin(yaw)*9,b-cos(yaw)*9,.6,1,1,1);
+    float a=x+player.x/CELL*scale,b=y+(MH-player.z/CELL)*scale;rect(a-2,b-2,4,4,.8,1,1,1);line2(a,b,a+sinf(yaw)*9,b-cosf(yaw)*9,.6,1,1,1);
     if(full){textAt(x,y+MH*scale+15,0,"01 COOLANT / 02 FOUNDRY / 03 CORE",.55,.7,.7);textAt(x,y+MH*scale+36,0,"GOLD: RELAY   GREEN: OFFLINE",.6,.75,.75);}
 }
 static void drawUI(void){
@@ -599,12 +653,23 @@ static GLuint shaderProgram(const char *vs,const char *fs){
     LinkProgram(p);GLint ok;GetProgramiv(p,GL_LINK_STATUS,&ok);if(!ok){GetProgramInfoLog(p,sizeof(lastError),NULL,lastError);fail(lastError);return 0;}return p;
 }
 static void uniform1(GLuint prog,const char *n,float f){Uniform1f(GetUniformLocation(prog,n),f);}
+static void targetTexture(GLuint t,int format,int w,int h){
+    glBindTexture(GL_TEXTURE_2D,t);glTexImage2D(GL_TEXTURE_2D,0,format,w,h,0,GL_RGBA,GL_FLOAT,NULL);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+}
+static void screenQuad(void){
+    glBegin(GL_QUADS);glTexCoord2f(0,0);glVertex2f(-1,-1);glTexCoord2f(1,0);glVertex2f(1,-1);glTexCoord2f(1,1);glVertex2f(1,1);glTexCoord2f(0,1);glVertex2f(-1,1);glEnd();
+}
 static int resizeTargets(void){
     rw=MAX(320,width*(quality?1:.67f));rh=MAX(240,height*(quality?1:.67f));
-    glBindTexture(GL_TEXTURE_2D,colorTex);glTexImage2D(GL_TEXTURE_2D,0,GL_RGB8,rw,rh,0,GL_RGB,GL_UNSIGNED_BYTE,NULL);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    targetTexture(colorTex,GL_RGBA16F_ARB,rw,rh);
     glBindTexture(GL_TEXTURE_2D,depthTex);glTexImage2D(GL_TEXTURE_2D,0,GL_DEPTH_COMPONENT24,rw,rh,0,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,NULL);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     BindFramebuffer(GL_FRAMEBUFFER_EXT,fbo);FramebufferTexture2D(GL_FRAMEBUFFER_EXT,GL_COLOR_ATTACHMENT0_EXT,GL_TEXTURE_2D,colorTex,0);FramebufferTexture2D(GL_FRAMEBUFFER_EXT,GL_DEPTH_ATTACHMENT_EXT,GL_TEXTURE_2D,depthTex,0);
-    GLenum status=CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);BindFramebuffer(GL_FRAMEBUFFER_EXT,0);return status==GL_FRAMEBUFFER_COMPLETE_EXT;
+    GLenum status=CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);int format=GL_RGBA16F_ARB;
+    if(status!=GL_FRAMEBUFFER_COMPLETE_EXT){format=GL_RGBA8;targetTexture(colorTex,format,rw,rh);status=CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);}
+    if(status!=GL_FRAMEBUFFER_COMPLETE_EXT)return 0;
+    BindFramebuffer(GL_FRAMEBUFFER_EXT,bloomFBO);
+    for(int i=0;i<2;i++){targetTexture(bloomTex[i],format,rw/4,rh/4);FramebufferTexture2D(GL_FRAMEBUFFER_EXT,GL_COLOR_ATTACHMENT0_EXT,GL_TEXTURE_2D,bloomTex[i],0);if(CheckFramebufferStatus(GL_FRAMEBUFFER_EXT)!=GL_FRAMEBUFFER_COMPLETE_EXT)return 0;}
+    BindFramebuffer(GL_FRAMEBUFFER_EXT,0);return 1;
 }
 static int initGL(void){
     PIXELFORMATDESCRIPTOR pfd={0};pfd.nSize=sizeof(pfd);pfd.nVersion=1;pfd.dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;pfd.iPixelType=PFD_TYPE_RGBA;pfd.cColorBits=32;pfd.cDepthBits=24;pfd.iLayerType=PFD_MAIN_PLANE;
@@ -618,11 +683,11 @@ static int initGL(void){
 #undef LOAD
     logline((const char*)glGetString(GL_VENDOR));logline((const char*)glGetString(GL_RENDERER));logline((const char*)glGetString(GL_VERSION));
     swapInterval=(SwapIntervalFn)wglGetProcAddress("wglSwapIntervalEXT");if(swapInterval)swapInterval(testMode?0:1);
-    worldProgram=shaderProgram(sceneVS,sceneFS);postProgram=shaderProgram(postVS,postFS);depthProgram=shaderProgram("#version 120\nvoid main(){gl_Position=gl_ModelViewProjectionMatrix*gl_Vertex;}","#version 120\nvoid main(){gl_FragColor=vec4(1);}");if(!worldProgram||!postProgram||!depthProgram)return 0;
-    GenFramebuffers(1,&fbo);glGenTextures(1,&colorTex);glGenTextures(1,&depthTex);if(!resizeTargets())return fail("Framebuffer initialization failed.");
+    worldProgram=shaderProgram(sceneVS,sceneFS);postProgram=shaderProgram(postVS,postFS);bloomProgram=shaderProgram(postVS,bloomFS);depthProgram=shaderProgram("#version 120\nvoid main(){gl_Position=gl_ModelViewProjectionMatrix*gl_Vertex;}","#version 120\nvoid main(){gl_FragColor=vec4(1);}");if(!worldProgram||!postProgram||!depthProgram||!bloomProgram)return 0;
+    GenFramebuffers(1,&bloomFBO);glGenTextures(2,bloomTex);GenFramebuffers(1,&fbo);glGenTextures(1,&colorTex);glGenTextures(1,&depthTex);if(!resizeTargets())return fail("Framebuffer initialization failed.");
     GenFramebuffers(1,&shadowFBO);glGenTextures(1,&shadowTex);glBindTexture(GL_TEXTURE_2D,shadowTex);glTexImage2D(GL_TEXTURE_2D,0,GL_DEPTH_COMPONENT24,1024,1024,0,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,NULL);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     BindFramebuffer(GL_FRAMEBUFFER_EXT,shadowFBO);FramebufferTexture2D(GL_FRAMEBUFFER_EXT,GL_DEPTH_ATTACHMENT_EXT,GL_TEXTURE_2D,shadowTex,0);glDrawBuffer(GL_NONE);glReadBuffer(GL_NONE);if(CheckFramebufferStatus(GL_FRAMEBUFFER_EXT)!=GL_FRAMEBUFFER_COMPLETE_EXT)return fail("Shadow framebuffer initialization failed.");BindFramebuffer(GL_FRAMEBUFFER_EXT,0);
-    makeFonts();makeWorld();glEnable(GL_NORMALIZE);return 1;
+    makeMeshes();makeFonts();makeWorld();glEnable(GL_NORMALIZE);return 1;
 }
 static void matmul(float *out,const float *a,const float *b){for(int j=0;j<4;j++)for(int i=0;i<4;i++){float s=0;for(int k=0;k<4;k++)s+=a[i+k*4]*b[k+j*4];out[i+j*4]=s;}}
 static void camera(float offset){glMatrixMode(GL_MODELVIEW);glLoadIdentity();glTranslatef(-offset,offset*.45f,0);glRotatef(-pitch*180/PI,1,0,0);glRotatef(180-yaw*180/PI,0,1,0);glTranslatef(-player.x,-player.y,-player.z);}
@@ -632,11 +697,11 @@ static void render(void){
     float sp[16],sv[16],scombined[16],inverse[16]={0},shadowMatrix[16];
     BindFramebuffer(GL_FRAMEBUFFER_EXT,shadowFBO);glViewport(0,0,1024,1024);glClear(GL_DEPTH_BUFFER_BIT);UseProgram(depthProgram);glEnable(GL_DEPTH_TEST);glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);glDisable(GL_TEXTURE_2D);glDisable(GL_BLEND);
     glMatrixMode(GL_PROJECTION);glLoadIdentity();glFrustum(-.11,.11,-.11,.11,.08,180);glGetFloatv(GL_PROJECTION_MATRIX,sp);camera(.35);glGetFloatv(GL_MODELVIEW_MATRIX,sv);
-    glEnable(GL_POLYGON_OFFSET_FILL);glPolygonOffset(2,2);glCallList(worldList);for(int i=0;i<enemyCount;i++)if(enemies[i].hp>0)drawEnemy(enemies+i);glDisable(GL_POLYGON_OFFSET_FILL);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);matmul(scombined,sp,sv);
+    glEnable(GL_POLYGON_OFFSET_FILL);glPolygonOffset(2,2);glCallList(worldList);drawMachinery();for(int i=0;i<enemyCount;i++)if((enemies[i].hp>0||gameTime-enemies[i].dead<8)&&visibleEnemy(enemies+i))drawEnemy(enemies+i);glDisable(GL_POLYGON_OFFSET_FILL);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);matmul(scombined,sp,sv);
     BindFramebuffer(GL_FRAMEBUFFER_EXT,fbo);glViewport(0,0,rw,rh);glClearColor(.025,.04,.05,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDisable(GL_BLEND);
     glMatrixMode(GL_PROJECTION);glLoadIdentity();float n=.08f,fov=mouseRight?56:78,top=n*tan(fov*PI/360);glFrustum(-top*width/height,top*width/height,-top,top,n,180);
-    glMatrixMode(GL_MODELVIEW);glLoadIdentity();glRotatef(-pitch*180/PI+(shake>0?sin(totalTime*71)*shake*5:0),1,0,0);glRotatef(180-yaw*180/PI,0,1,0);
-    glTranslatef(-player.x,-player.y-(mode==1&&grounded?sin(stepPhase)*.018f:0),-player.z);
+    glMatrixMode(GL_MODELVIEW);glLoadIdentity();glRotatef(-pitch*180/PI+(shake>0?sinf(totalTime*71)*shake*5:0),1,0,0);glRotatef(180-yaw*180/PI,0,1,0);
+    glTranslatef(-player.x,-player.y-(mode==1&&grounded?sinf(stepPhase)*.018f:0),-player.z);
     UseProgram(worldProgram);uniform1(worldProgram,"time",totalTime);uniform1(worldProgram,"flash",gunKick);uniform1(worldProgram,"alert",bossAwake);
     float m[16];glGetFloatv(GL_MODELVIEW_MATRIX,m);
     for(int i=0;i<3;i++){for(int j=0;j<3;j++)inverse[i+j*4]=m[j+i*4];inverse[12+i]=-(m[i*4]*m[12]+m[i*4+1]*m[13]+m[i*4+2]*m[14]);}inverse[15]=1;matmul(shadowMatrix,scombined,inverse);UniformMatrix4fv(GetUniformLocation(worldProgram,"shadowM"),1,GL_FALSE,shadowMatrix);
@@ -644,14 +709,18 @@ static void render(void){
     lightPosition("L0",v3(17.5*CELL,6,18.5*CELL),m);lightPosition("L1",v3(17.5*CELL,5,6.5*CELL),m);
     lightPosition("L2",v3(4.5*CELL,4.5,18.5*CELL),m);lightPosition("L3",v3(29.5*CELL,5,18.5*CELL),m);
     lightPosition("L4",v3(17.5*CELL,7,34.5*CELL),m);lightPosition("L5",v3(17.5*CELL,5,25*CELL),m);
-    lightPosition("L6",add(player,mul(forward(),1)),m);
+    V3 glowPos=add(player,mul(forward(),1));float glowStrength=gunKick,bestGlow=100;
+    if(gunKick<.1f)for(int i=0;i<96;i++)if(bolts[i].life>0){float d=length(sub(bolts[i].p,player));if(d<bestGlow){bestGlow=d;glowPos=bolts[i].p;glowStrength=.7f;}}
+    lightPosition("L6",glowPos,m);uniform1(worldProgram,"flash",glowStrength);
     glCallList(worldList);drawDynamic();
     if(mode!=0&&mode!=4){glDepthRange(0,.03);drawWeapon();glDepthRange(0,1);}
-    BindFramebuffer(GL_FRAMEBUFFER_EXT,0);glViewport(0,0,width,height);glDisable(GL_DEPTH_TEST);UseProgram(postProgram);
+    glDisable(GL_DEPTH_TEST);UseProgram(bloomProgram);BindFramebuffer(GL_FRAMEBUFFER_EXT,bloomFBO);glViewport(0,0,rw/4,rh/4);ActiveTexture(GL_TEXTURE0);Uniform1i(GetUniformLocation(bloomProgram,"source"),0);
+    for(int i=0;i<2;i++){FramebufferTexture2D(GL_FRAMEBUFFER_EXT,GL_COLOR_ATTACHMENT0_EXT,GL_TEXTURE_2D,bloomTex[i],0);glBindTexture(GL_TEXTURE_2D,i?bloomTex[0]:colorTex);Uniform2f(GetUniformLocation(bloomProgram,"step"),i?0:4.f/rw,i?4.f/rh:0);uniform1(bloomProgram,"cutoff",i?0:.85f);screenQuad();}
+    BindFramebuffer(GL_FRAMEBUFFER_EXT,0);glViewport(0,0,width,height);UseProgram(postProgram);ActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,bloomTex[1]);Uniform1i(GetUniformLocation(postProgram,"bloom"),2);ActiveTexture(GL_TEXTURE0);
     ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,colorTex);Uniform1i(GetUniformLocation(postProgram,"scene"),0);
     ActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,depthTex);Uniform1i(GetUniformLocation(postProgram,"depth"),1);
     Uniform2f(GetUniformLocation(postProgram,"pixel"),1.f/rw,1.f/rh);uniform1(postProgram,"time",totalTime);uniform1(postProgram,"hurt",damageFlash);
-    glBegin(GL_QUADS);glTexCoord2f(0,0);glVertex2f(-1,-1);glTexCoord2f(1,0);glVertex2f(1,-1);glTexCoord2f(1,1);glVertex2f(1,1);glTexCoord2f(0,1);glVertex2f(-1,1);glEnd();
+    screenQuad();
     ActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,0);ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,0);drawUI();
 }
 static void capture(const char *path){
@@ -732,18 +801,17 @@ static int campaignTest(void){
         while(head<tail){int x=qx[head],z=qz[head++];for(int d=0;d<4;d++){int nx=x+(d==0)-(d==1),nz=z+(d==2)-(d==3);V3 p=cellpos(nx,nz);if(!solid(nx,nz)&&!collides(p.x,p.z,.4)&&route[nz][nx]==9999){route[nz][nx]=route[z][x]+1;qx[tail]=nx;qz[tail++]=nz;}}}
         int x=(int)(player.x/CELL),z=(int)(player.z/CELL),best=route[z][x];V3 target=cellpos(x,z);
         for(int d=0;d<4;d++){int nx=x+(d==0)-(d==1),nz=z+(d==2)-(d==3);if(!solid(nx,nz)&&route[nz][nx]<best){best=route[nz][nx];target=cellpos(nx,nz);}}
-        V3 dir=sub(target,player);dir.y=0;float walkAngle=atan2(dir.x,dir.z);int hit=-1;float nearest=42;
+        V3 dir=sub(target,player);dir.y=0;float walkAngle=atan2f(dir.x,dir.z);int hit=-1;float nearest=42;
         for(int i=0;i<enemyCount;i++){Enemy *e=enemies+i;if(e->hp<=0)continue;V3 point=add(e->p,v3(0,e->type==3?2.3f:e->type==1?1.85f:1.35f,0)),d=sub(point,player);float len=length(d);if(len<nearest&&traceWorld(player,norm(d),len+.3)>len-.1){nearest=len;hit=i;}}
         memset(keys,0,sizeof(keys));mouseDown=0;
-        if(hit>=0){Enemy *e=enemies+hit;V3 d=sub(add(e->p,v3(0,e->type==3?2.3f:e->type==1?1.85f:1.35f,0)),player);yaw=atan2(d.x,d.z);pitch=atan2(d.y,sqrt(d.x*d.x+d.z*d.z));
+        if(hit>=0){Enemy *e=enemies+hit;V3 d=sub(add(e->p,v3(0,e->type==3?2.3f:e->type==1?1.85f:1.35f,0)),player);yaw=atan2f(d.x,d.z);pitch=atan2f(d.y,sqrtf(d.x*d.x+d.z*d.z));
             int choice=(e->type>=2&&ammo[2]+reserve[2]>0)?2:nearest<6&&ammo[1]+reserve[1]>0?1:0;if(ammo[choice]+reserve[choice]==0)for(int k=0;k<3;k++)if(ammo[k]+reserve[k]>0)choice=k;
             if(choice!=weapon){weapon=choice;reloadTime=0;}mouseDown=1;
         }else{yaw=walkAngle;pitch=0;}
-        if((hit<0||nearest>13||relayCount<3)&&length(dir)>.15){float rel=walkAngle-yaw;float f=cos(rel),s=sin(rel);if(f>.3)keys['W']=1;if(f<-.3)keys['S']=1;if(s>.3)keys['A']=1;if(s<-.3)keys['D']=1;}
+        if((hit<0||nearest>13||relayCount<3)&&length(dir)>.15){float rel=walkAngle-yaw;float f=cosf(rel),s=sinf(rel);if(f>.3)keys['W']=1;if(f<-.3)keys['S']=1;if(s>.3)keys['A']=1;if(s<-.3)keys['D']=1;}
         if(relayCount<3&&dsq(player.x-goal.x,player.z-goal.z)<9)pressed['E']=1;
         totalTime+=1.f/60;simulate(1.f/60);
         if(previous!=relayCount){fprintf(logFile,"At %.1fs: relays=%d health=%.1f kills=%d\n",gameTime,relayCount,health,kills);previous=relayCount;}
-        if(frame%600==0)fprintf(logFile,"t=%.1f pos=(%.1f,%.1f) HP=%.1f kills=%d ammo=%d/%d %d/%d %d/%d\n",gameTime,player.x,player.z,health,kills,ammo[0],reserve[0],ammo[1],reserve[1],ammo[2],reserve[2]);
     }
     int ok=mode==4;fprintf(logFile,"%s Campaign with ordinary movement, firing, damage, pickups and interactions. Time %.1f, kills %d, relays %d, Warden %d, health %.1f, mode %d\n",ok?"PASS":"FAIL",gameTime,kills,relayCount,bossDead,health,mode);fclose(logFile);logFile=NULL;return !ok;
 }
@@ -758,10 +826,13 @@ static int verifyGraphics(void){
     mode=1;player=cellpos(17,4);player.y=1.65;yaw=0;pitch=0;render();glFinish();capture("02-arrival.bmp");
     player=cellpos(14,14);player.y=1.65;yaw=.62;pitch=.02;render();glFinish();capture("03-reactor.bmp");
     player=cellpos(4,19);player.y=1.65;yaw=.28;pitch=-.05;render();glFinish();capture("04-relay.bmp");
-    player=cellpos(17,32);player.y=1.65;yaw=0;pitch=.04;bossAwake=1;relayCount=3;weapon=2;for(int i=0;i<enemyCount;i++)enemies[i].yaw=atan2(player.x-enemies[i].p.x,player.z-enemies[i].p.z)*180/PI;render();glFinish();capture("05-warden.bmp");
+    player=cellpos(17,32);player.y=1.65;yaw=0;pitch=.04;bossAwake=1;relayCount=3;gateLift=6;weapon=2;for(int i=0;i<enemyCount;i++)enemies[i].yaw=atan2f(player.x-enemies[i].p.x,player.z-enemies[i].p.z)*180/PI;render();glFinish();capture("05-warden.bmp");
     int ok=glGetError()==GL_NO_ERROR;logline(ok?"PASS OpenGL error check":"FAIL OpenGL error check");
     LARGE_INTEGER a,b;QueryPerformanceCounter(&a);for(int i=0;i<90;i++){totalTime+=1.f/60;render();}glFinish();QueryPerformanceCounter(&b);
     char s[256];snprintf(s,sizeof(s),"90 full-resolution frames: %.2f ms average",(b.QuadPart-a.QuadPart)*1000./frequency.QuadPart/90);logline(s);
+    for(int i=0;i<enemyCount;i++)enemies[i].cd=0;
+    mouseDown=1;for(int i=0;i<75;i++){totalTime+=1.f/60;simulate(1.f/60);render();}mouseDown=0;glFinish();capture("06-combat.bmp");
+    failures+=check(glGetError()==GL_NO_ERROR,"Animated combat and particle rendering");
     return !ok||failures;
 }
 int WINAPI WinMain(HINSTANCE instance,HINSTANCE previous,LPSTR cmd,int show){
@@ -780,7 +851,7 @@ int WINAPI WinMain(HINSTANCE instance,HINSTANCE previous,LPSTR cmd,int show){
     while(running){
         MSG msg;while(PeekMessage(&msg,NULL,0,0,PM_REMOVE)){if(msg.message==WM_QUIT)running=0;TranslateMessage(&msg);DispatchMessage(&msg);}
         LARGE_INTEGER now;QueryPerformanceCounter(&now);float dt=(now.QuadPart-lastCounter.QuadPart)/(double)frequency.QuadPart;lastCounter=now;dt=CLAMP(dt,.001f,.05f);totalTime+=dt;
-        if(mode==0)yaw=.85f+sin(totalTime*.09f)*.13f;
+        if(mode==0)yaw=.85f+sinf(totalTime*.09f)*.13f;
         if(mode==1)simulate(dt);else memset(pressed,0,sizeof(pressed));
         pumpAudio();if(!IsIconic(window)){render();SwapBuffers(dc);}else Sleep(30);
         QueryPerformanceCounter(&now);lastFrameMS=(now.QuadPart-lastCounter.QuadPart)*1000./frequency.QuadPart;
