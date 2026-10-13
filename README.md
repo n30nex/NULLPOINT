@@ -1,102 +1,89 @@
 # NULLPOINT
 
-A native Windows single-player FPS in **95,232 bytes**. Inspired by the procedural size challenge of [.kkrieger](https://simple.wikipedia.org/wiki/.kkrieger).
+A complete native Windows single-player FPS in **93,696 bytes**. Explore a hostile reactor facility, find weapon upgrades, sever three relays, destroy the Warden, and defend extraction.
 
-**[Download NULLPOINT.exe](https://github.com/n30nex/NULLPOINT/raw/refs/heads/main/bin/NULLPOINT.exe)** · [Full manual](docs/Manual.txt)
+**[Download NULLPOINT.exe](https://github.com/n30nex/NULLPOINT/raw/refs/heads/main/bin/NULLPOINT.exe)** · [Research and measurements](docs/RESEARCH.md) · [Manual](docs/Manual.txt)
 
 ![NULLPOINT reactor chamber](docs/screenshot.png)
 
 ## Play
 
-Download the executable and open it. Press **Enter** to start. Requires 64-bit Windows 10/11 and a graphics driver supporting OpenGL 2.1 with framebuffer objects. No installation, network connection, external game assets, or additional DLL downloads are needed.
+Download the executable, open it, and press **Enter**. Requires 64-bit Windows 10/11 and a graphics driver supporting OpenGL 2.1 with framebuffer objects. The game runs offline using Windows system libraries; no installation, external game assets, or additional DLL downloads are needed.
 
-Sever the facility's three power relays, destroy the Warden, and reach extraction.
+The Service and Armory side wings contain optional **overclock cells**. A third is in containment. Each adds 15% of base weapon/grenade damage and supplies two grenades. Orange energy barrels explode and can start chain reactions. After defeating the Warden, hold the green extraction bay for six seconds while reinforcements attack.
 
 | Control | Action |
 | --- | --- |
-| WASD | Move and strafe |
-| Mouse | Look |
+| WASD / mouse | Move and strafe / look |
 | Left / right click | Fire / aim |
-| 1 / 2 / 3 or mouse wheel | Select weapon |
-| R | Reload |
-| E | Use a relay |
+| 1 / 2 / 3 or wheel | Carbine / shotgun / ion lance |
+| G | Throw a bouncing grenade; 2.1-second fuse |
+| R / E | Reload / use a relay |
 | Shift / Space / Ctrl | Sprint / jump / crouch |
-| Hold Tab | Map |
+| Hold Tab | Facility map |
 | Escape | Pause and release the mouse |
 | F11 | Borderless fullscreen |
 | M / End | Mute / quit |
 
-Choose Recruit, Operative, or Veteran using the title screen's left/right arrows. Arrow keys also aim during play, and F fires. The pause menu includes mouse sensitivity and render resolution settings. Losing focus pauses the game.
+Choose Recruit, Operative, or Veteran with the title screen's left/right arrows. Arrow keys also aim during play, and F fires. The pause menu provides mouse sensitivity, rendering quality, and restart controls. Losing focus pauses the game. Choose Performance with Q in the pause menu, or launch with `--performance`, to reduce internal render resolution.
 
-## Inside 96 KB
+## Research-driven expansion
 
-- Three weapons: pulse carbine, breach shotgun, and ion lance.
-- Three ordinary enemy classes, relay reinforcements, and a six-legged boss: 25 enemies in total.
-- A reactor complex with procedural architecture, metal panels, pipework, gantries, machinery, and signs.
-- HDR lighting with soft, two-pass bloom, headlamp shadows, surface relief, brushed metal, worn paint, damp floors, fog, and sparks.
-- Rotating fans, reactor machinery, articulated Warden legs, movement-driven robot strides, drone rotors, death animations, and mechanical weapon recoil/reloads.
-- Synthesized music and sound effects, armor, pickups, a map, and complete loss/restart/extraction states.
+- **Gameplay:** two additional side wings, three permanent damage upgrades, bouncing grenades, ten destructible barrels, chain reactions, and extraction defense. The complete route contains **39 enemies**, including the boss and reinforcements.
+- **Physics:** fixed 120 Hz simulation, acceleration/friction, air control, buffered jumps, a short coyote-time allowance, crate landings, grenade restitution and damping, blast knockback, and wall-aware blast propagation.
+- **Graphics:** generated bevel geometry, cached meshes, roughness-aware GGX-style lighting, procedural surface relief, worn paint, brushed metal, local light haze, contact shading, HDR bloom, and clipped planar floor reflections at half resolution.
+- **Animation:** movement-driven strides, articulated Warden legs and pistons, drone rotors, machinery, hit flinches, death animations, weapon sway, aligned aiming, recoil/reloads, and grenade-throw motion.
+- **Presentation:** synthesized music and effects, vitals/ammunition, objective and extraction progress, overclock/grenade counters, and a camera-consistent map.
 
-The limit applies to the **uncompressed executable**: 95,232 bytes, leaving 768 bytes below the strict 96,000-byte ceiling. The screenshot, documentation, and source are optional and are not loaded by the game. Fonts and DLLs come from Windows. No executable packer or downloader is used.
+![Service wing and an overclock cell](docs/service.png)
+
+## The byte budget
+
+| Build | Executable bytes | Free below 96,000 |
+| --- | ---: | ---: |
+| Previous graphics update | 95,232 | 768 |
+| Compacted baseline before expansion | 84,992 | 11,008 |
+| **Expanded game** | **93,696** | **2,304** |
+
+The final game is **1,536 bytes smaller** than the previous version despite its expanded content. It is an ordinary native PE executable: machine code is not packed, extracted, downloaded, or launched through a wrapper. Embedded shader text uses Windows MSZIP compression and expands in memory at startup, shrinking from 5,973 to 2,684 bytes. Generated geometry, cached uniforms/meshes, compact data tables, and a measured internal calling convention save further space and repeated work.
+
+The limit applies to `bin/NULLPOINT.exe`. Screenshots, documentation, source, and developer tests are optional and are not loaded by the game. Artwork and music are generated at runtime; text uses installed Windows fonts.
 
 ## Build
 
-Install an x86_64 MinGW-w64 GCC toolchain and make `gcc` available on `PATH`. From PowerShell in the repository:
+On Windows, place **Python 3** and **x86_64 MinGW-w64 GCC** on `PATH`, then run:
 
 ```powershell
 .\build.ps1
 ```
 
-This creates `NULLPOINT.exe` beside the source. To choose an output:
+This packages `shaders.glsl` with the Windows Compression API, validates its compression round trip, and builds `NULLPOINT.exe` beside the source. No Python packages are required. An optional `-OutputPath` chooses another destination. A candidate of 96,000 bytes or more is rejected before replacing the destination.
+
+The verified compiler is GCC 13.2.0 with `-Oz`. Another compiler or Windows codec version may change size/hash. Zero-initialized data remains in BSS; `-fdata-sections` is intentionally omitted. Internal helpers use GCC's System V ABI attribute; Win32 callbacks and imported APIs retain their Windows ABI. Edit readable GLSL, not generated `build/shaders.h`.
+
+## Verify
 
 ```powershell
-.\build.ps1 -OutputPath 'C:\path\to\NULLPOINT.exe'
+.\verify.ps1
 ```
 
-The build rejects a binary of 96,000 bytes or more. The committed executable was built with GCC 13.2.0; another compiler version may produce a different size or hash. Zero-initialized buffers must remain in BSS, so the build intentionally omits `-fdata-sections`.
+This builds the shipping game and a separate developer test executable, then runs:
 
-## Verification
+- **26 gameplay/physics checks**, including frame-rate independence, crate landings, buffered input, grenade bounce, chain reactions, and collision removal.
+- Complete campaigns on **all three difficulties**, collecting all three upgrades, throwing grenades, defeating all 39 enemies, and completing extraction.
+- **20 camera-relative input checks** and OpenGL/animated-combat checks inside the exact shipping executable.
+- Eight native captures checked for completeness and the invalid-lighting regression found during development.
 
-The executable contains optional diagnostics. They write results into the current working directory and return a nonzero exit code on failure. Run them in a writable folder:
+All checks pass. Scripted campaigns use perfect aim; they are functional coverage rather than human balance testing. Full and Performance rendering modes were both checked. Detailed lighting and the mirrored scene increase graphics work; samples and limitations are in the research notes. No faster gameplay-FPS claim is implied.
 
-```powershell
-$exe = (Resolve-Path '.\bin\NULLPOINT.exe').Path
-foreach ($check in '--selftest', '--playtest', '--verify') {
-    $process = Start-Process -FilePath $exe -ArgumentList $check -Wait -PassThru
-    if ($process.ExitCode -ne 0) { throw "$check failed: $($process.ExitCode)" }
-}
-```
+Developer diagnostics are separate and may exceed 96 KB. They are **not** the challenge entry. The shipping game accepts `--verify` to produce `graphics.txt` and eight BMP captures in a writable working directory. `--selftest` and `--playtest` belong to the developer executable generated with `build.ps1 -Diagnostics`.
 
-- `--selftest`: 17 gameplay checks covering collision, ammunition, damage, objectives, extraction, death, and restart.
-- `--playtest`: a deterministic Recruit campaign using ordinary movement, combat, pickups, damage, and relay interactions. Completes all three relays, defeats all 25 enemies, and extracts without teleportation or invulnerability. Its perfect aim is not a substitute for human difficulty testing.
-- `--verify`: 16 movement checks against the actual rendered camera basis, four mouse-direction checks, OpenGL error checks, six native render captures including animated combat, and a short rendering benchmark. Requires a working graphics driver.
-
-All checks passed on the committed executable. The corrected controls include standard horizontal mouse look, camera-relative strafing, and matching arrow-key yaw.
-
-## Graphics update and compactness
-
-The richer build uses only **2,560 additional bytes** compared with the first release. Model parts are stored as compact signed-byte tables, cube geometry uses indexed corners, and smooth sphere geometry is generated once and reused. Geometry calculations use single precision while the audio synthesizer retains its double-precision time/oscillator path. Enemies outside a conservative view boundary are skipped in both render passes; steep camera angles and wide windows retain a wider boundary.
-
-The shader now computes material coordinates in the vertex stage and uses compact 2D noise instead of repeated 3D noise and per-fragment inverse-matrix work. Bloom is blurred in two passes at one-quarter width and height. Floating-point render targets preserve bright lighting before tone mapping; an 8-bit fallback is provided for drivers that cannot render to the floating-point format.
-
-| Native 1280x720 render benchmark | Previous build | Graphics update |
-| --- | ---: | ---: |
-| Trial 1, ms/frame | 3.40 | 3.19 |
-| Trial 2, ms/frame | 24.30 | 3.35 |
-| Trial 3, ms/frame | 4.10 | 3.37 |
-| Median, ms/frame | **4.10** | **3.35** |
-| Uncompressed executable | 92,672 bytes | 95,232 bytes |
-
-Measured on a GTX 1060 6GB with driver 576.52, using the same 90-frame Warden-arena renderer benchmark after native capture checks. The previous build had one timing outlier; the comparison uses medians. These are short rendering samples, not sustained gameplay or display-refresh guarantees. The final candidate also passed the 17 gameplay checks, 20 movement/mouse checks, OpenGL and animated-combat rendering checks, and a complete Recruit campaign.
-
-![Animated combat capture](docs/combat.png)
-
-## Executable integrity
+## Integrity
 
 SHA-256 of `bin/NULLPOINT.exe`:
 
 ```text
-59d7ab303f75a125744a8029134b4bfd7bd30692bd3da350c9ed8ca7aaa29f85
+1320a9a63c79eacda71b76c97eb57c6ab5ef901fec19e83b742bb4c738c20cc9
 ```
 
-This is an original game; no .kkrieger code or artwork is included. It has not been submitted to a contest or checked against any additional event rules.
+Inspired by [.kkrieger](https://simple.wikipedia.org/wiki/.kkrieger). No .kkrieger code or artwork is included. No contest submission or validation against additional event-specific rules has been performed.

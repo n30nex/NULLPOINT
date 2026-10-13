@@ -1,98 +1,90 @@
-NULLPOINT // NATIVE 96K
-An original, offline single-player first-person shooter.
+NULLPOINT // EXPANDED NATIVE 96K
 
 RUN
-Open NULLPOINT.exe. Press Enter to begin. No installation or downloads.
-Requires 64-bit Windows 10/11 and a graphics driver supporting OpenGL 2.1
-with framebuffer objects. Only Windows system DLLs are imported.
-
-THE CHALLENGE
-The complete playable executable is 95,232 bytes, below both a strict
-96,000-byte limit and a 96 KiB limit. It is not an HTML wrapper, launcher,
-compressed self-extractor, or downloader. No external game assets are needed.
-Source, documentation and preview images are separate optional materials.
+Open NULLPOINT.exe and press Enter. Requires 64-bit Windows 10/11 and an
+OpenGL 2.1 graphics driver with framebuffer support. No installation,
+internet connection, external game assets, or extra DLL downloads.
 
 MISSION
-Explore the reactor facility and sever three power relays with E.
-The containment gate opens after all three are offline. Destroy the Warden
-and reach the green extraction bay at the far end of its arena.
+Use E near each of the three power relays. After all three are offline, the
+containment gate opens. Destroy the Warden, reach the green extraction bay,
+and hold it for six seconds while defending against reinforcements.
+Leaving the bay reduces uplink progress.
+
+OPTIONAL EXPLORATION
+The Service and Armory wings each hold an overclock cell; a third is inside
+containment. Purple cells permanently add 15% of base weapon and grenade
+damage, restore 25 health, and grant two grenades. All three give +45% damage.
+The full route has 39 enemies including the Warden and reinforcements.
+
+COMBAT
+All three weapons are available from the start. The carbine is automatic,
+the shotgun fires nine pellets, and the ion lance deals heavy direct damage.
+G throws a grenade with a 2.1-second fuse. Grenades bounce, slow on impact,
+and damage nearby enemies and the player. Stay clear of your own blast.
+Orange barrels can be shot or detonated by explosions. Chain reactions
+respect walls. Destroyed barrels stop blocking movement. Munitions pickups
+refill all weapon reserves and add a grenade, up to eight.
 
 CONTROLS
 W / S        Forward / backward
 A / D        Strafe left / right
-Mouse        Look (standard, non-inverted)
+Mouse        Standard look
 Left click   Fire
 Right click  Aim
 1 / 2 / 3    Carbine / shotgun / ion lance
 Mouse wheel  Cycle weapons
-R            Reload
-E            Interact with a nearby relay
+G            Throw grenade
+R / E        Reload / interact
 Shift        Sprint
 Space        Jump
 Ctrl         Crouch
 Tab (hold)   Facility map
-Escape       Pause / resume; releases the mouse
-F11          Toggle borderless fullscreen
-M            Mute / unmute audio
-End          Quit
+Escape       Pause / resume and release mouse
+F11          Borderless fullscreen
+M / End      Mute / quit
 
-Arrow keys can aim and F can fire without a mouse.
-In the pause menu: Q changes render resolution, minus/plus changes mouse
-sensitivity, and N restarts the mission. Alt-Tab automatically pauses.
-Choose Recruit, Operative or Veteran with left/right on the title screen.
+Arrow keys aim and F fires without a mouse. Choose difficulty with left/right
+on the title screen. In the pause menu, Q changes render quality, minus/plus
+changes mouse sensitivity, and N restarts. Alt-Tab pauses automatically.
+The --performance option starts with reduced internal render resolution.
 
-CONTENTS
-Three weapons, three ordinary enemy classes, a six-legged boss, 25 enemies
-including relay reinforcements, three relays, pickups, armor, map, jumping,
-crouching, sprinting, death/restart and extraction states. Procedural metal
-materials, architecture, machinery, animated robots, headlamp shadows,
-surface relief, brushed metal, worn paint, damp floors, HDR lighting, soft
-bloom, fog, sparks and projectile light. Fans and reactor machinery rotate;
-robots have movement-driven strides and death animations, and the Warden
-has articulated legs and pistons. Weapons have detailed parts and recoil. Music and
-sound effects are synthesized at runtime. Text uses installed Windows fonts.
+MOVEMENT
+Movement accelerates and slows smoothly. Simulation runs at 120 Hz,
+independently of rendering. Jumping can land on crate tops. Jump input is
+briefly buffered, with a short allowance when stepping off an edge.
 
-VERIFICATION
-The corrected executable passed 17 gameplay checks, 16 camera-relative WASD
-checks (four directions at four headings), four rendered mouse-direction
-checks, the OpenGL error check, and animated-combat rendering. A deterministic Recruit playthrough
-completed all three relays, defeated all 25 hostiles and extracted through
-ordinary movement, firing, damage, pickup and interaction code, without
-teleporting or invulnerability. Its perfect aim is not human difficulty QA.
+SIZE AND CONTENT
+The complete playable executable is 93,696 bytes: 2,304 below the strict
+96,000-byte limit, and 1,536 smaller than the previous version. Native code
+is not packed. Embedded shader text expands in memory using a Windows API.
+Geometry, materials, music and sound are generated; Windows provides fonts
+and DLLs. Screenshots, source and developer tests are separate optional files.
 
-Native 1280x720 render captures were inspected. On the local GTX 1060 6GB,
-three 90-frame rendering samples had a median of 3.35 ms/frame, compared
-with 4.10 ms/frame for the previous build. These short samples do not
-guarantee sustained frame rate on this or other computers.
+Graphics include beveled meshes, metal/paint shading, HDR bloom, contact
+shading, half-resolution planar reflections, headlamp shadows, light haze,
+animated machinery, enemy limbs, weapon motion and impact particles.
 
-REPRODUCE CHECKS
-From a writable folder, run these optional executable arguments and wait
-for the process to exit:
-  NULLPOINT.exe --selftest  -> selftest.txt
-  NULLPOINT.exe --playtest  -> campaign.txt
-  NULLPOINT.exe --verify    -> graphics.txt and six native BMP captures
-Exit code zero means the selected check passed. The graphics check requires
-a working OpenGL driver. These files are generated only in diagnostic modes.
+VALIDATION
+Passed 26 gameplay/physics checks, 20 camera/input checks, native renderer
+checks and eight capture checks. Scripted campaigns on all three difficulties
+collect every upgrade, throw grenades, defeat all 39 enemies and extract.
+Perfect scripted aim is not a human balance assessment. Full and Performance
+rendering both passed. See docs/RESEARCH.md for measurements and limitations.
 
-BUILD
-The optional source archive contains nullpoint.c and build.ps1.
-With an x86_64 MinGW-w64 GCC on PATH, run build.ps1 in PowerShell. It builds
-NULLPOINT.exe beside the source and rejects binaries of 96,000 bytes or more.
-An optional -OutputPath argument chooses another output path.
-The optimized build uses single-precision geometry, packed model parts,
-reused procedural meshes, simpler shader noise and view-based culling.
-The verified build used GCC 13.2.0. Other compiler versions may change size.
-Do not add -fdata-sections: this linker can put zero-initialized game buffers
-in the on-disk data section instead of BSS, unnecessarily increasing size.
+BUILD / TEST
+Source requires Python 3 and x86_64 MinGW-w64 GCC on Windows. No Python
+packages are required. Run build.ps1 for the playable game; it rejects an
+oversized candidate before replacing the destination. Run verify.ps1 for
+all development checks. Separate developer test binaries may exceed 96 KB;
+only NULLPOINT.exe is the game entry. The shipping --verify option writes
+graphics.txt and eight BMP captures in the current writable directory.
+Developer builds also support --selftest and --playtest, optionally with
+--operative or --veteran.
 
-CONTROL FIX
-Horizontal look, strafing and keyboard yaw now follow the rendered camera's
-right/left basis. Both mouse axes and all WASD directions have explicit
-rendered-view regression checks.
+SHA256
+1320a9a63c79eacda71b76c97eb57c6ab5ef901fec19e83b742bb4c738c20cc9
 
-SHA256 (NULLPOINT.exe)
-59d7ab303f75a125744a8029134b4bfd7bd30692bd3da350c9ed8ca7aaa29f85
-
-Inspired by the procedural size-coding challenge of .kkrieger; no game code
-or art from .kkrieger is included. This build has not been submitted to a
-contest, and compliance with any additional event rules has not been checked.
+Inspired by .kkrieger's procedural size challenge. No .kkrieger code or
+artwork is included. No contest submission or additional event-rule
+validation has been performed.
