@@ -1,0 +1,11 @@
+/NULLPOINT.exe
+/*.bmp
+/selftest.txt
+/campaign.txt
+/graphics.txt
+*.o
+*.obj
+*.map
+*.pdb
+*.ilk
+*.tmp
